@@ -1,0 +1,1173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Taiwanese Mahjong Coach</title>
+  <meta name="description" content="Taiwanese Mahjong with AI coaching — learn strategy as you play" />
+  <meta name="theme-color" content="#0a1628" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🀄</text></svg>" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <style>
+    html, body, #root { margin: 0; padding: 0; height: 100%; width: 100%; overflow: hidden; background: #0a1628; }
+    * { box-sizing: border-box; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useEffect, useCallback, useRef } = React;
+
+
+// ============================================================
+// TILE DEFINITIONS
+// ============================================================
+const SUITS = { MAN: "man", BAM: "bam", CIRCLE: "circle" };
+const WINDS = ["East", "South", "West", "North"];
+const DRAGONS = ["Red", "Green", "White"];
+
+function createTile(suit, value, id) {
+  return { suit, value, id, isFlower: false };
+}
+function createWind(value, id) {
+  return { suit: "wind", value, id, isFlower: false };
+}
+function createDragon(value, id) {
+  return { suit: "dragon", value, id, isFlower: false };
+}
+function createFlower(value, id) {
+  return { suit: "flower", value, id, isFlower: true };
+}
+
+function buildDeck() {
+  const tiles = [];
+  let id = 0;
+  for (const suit of [SUITS.MAN, SUITS.BAM, SUITS.CIRCLE]) {
+    for (let v = 1; v <= 9; v++) {
+      for (let c = 0; c < 4; c++) tiles.push(createTile(suit, v, id++));
+    }
+  }
+  for (const w of WINDS) {
+    for (let c = 0; c < 4; c++) tiles.push(createWind(w, id++));
+  }
+  for (const d of DRAGONS) {
+    for (let c = 0; c < 4; c++) tiles.push(createDragon(d, id++));
+  }
+  for (let f = 1; f <= 8; f++) tiles.push(createFlower(f, id++));
+  return tiles;
+}
+
+function shuffle(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+// ============================================================
+// TILE DISPLAY
+// ============================================================
+function tileLabel(tile) {
+  if (!tile) return "?";
+  if (tile.isFlower) return tile.value <= 4 ? ["🌸","🌺","🌼","🌻"][tile.value-1] : ["🍃","🎋","🍂","⛄"][tile.value-5];
+  if (tile.suit === "wind") return { East: "E", South: "S", West: "W", North: "N" }[tile.value];
+  if (tile.suit === "dragon") return { Red: "中", Green: "發", White: "白" }[tile.value];
+  const suitSymbol = { man: "万", bam: "🎍", circle: "●" }[tile.suit];
+  return `${tile.value}${suitSymbol}`;
+}
+
+// Returns a two-line display: number on top, suit label on bottom
+function tileParts(tile) {
+  if (!tile) return { top: "?", bottom: "" };
+  if (tile.isFlower) return { top: tile.value <= 4 ? ["🌸","🌺","🌼","🌻"][tile.value-1] : ["🍃","🎋","🍂","⛄"][tile.value-5], bottom: "FL" };
+  if (tile.suit === "wind") return { top: { East: "E", South: "S", West: "W", North: "N" }[tile.value], bottom: "Wind" };
+  if (tile.suit === "dragon") return { top: { Red: "中", Green: "發", White: "白" }[tile.value], bottom: { Red: "Red", Green: "Grn", White: "Wht" }[tile.value] };
+  const suitLabel = { man: "Man", bam: "Bam", circle: "Cir" }[tile.suit];
+  return { top: String(tile.value), bottom: suitLabel };
+}
+
+function tileColor(tile) {
+  if (!tile) return "#888";
+  if (tile.isFlower) return "#22c55e";
+  if (tile.suit === "wind") return "#60a5fa";
+  if (tile.suit === "dragon") {
+    if (tile.value === "Red") return "#ef4444";
+    if (tile.value === "Green") return "#22c55e";
+    return "#e2e8f0";
+  }
+  if (tile.suit === "man") return "#f97316";
+  if (tile.suit === "bam") return "#4ade80";
+  if (tile.suit === "circle") return "#60a5fa";
+  return "#e2e8f0";
+}
+
+// ============================================================
+// GAME LOGIC
+// ============================================================
+function sortHand(hand) {
+  const suitOrder = { man: 0, bam: 1, circle: 2, wind: 3, dragon: 4, flower: 5 };
+  const windOrder = { East: 0, South: 1, West: 2, North: 3 };
+  const dragonOrder = { Red: 0, Green: 1, White: 2 };
+  return [...hand].sort((a, b) => {
+    const sa = suitOrder[a.suit], sb = suitOrder[b.suit];
+    if (sa !== sb) return sa - sb;
+    if (a.suit === "wind") return windOrder[a.value] - windOrder[b.value];
+    if (a.suit === "dragon") return dragonOrder[a.value] - dragonOrder[b.value];
+    return a.value - b.value;
+  });
+}
+
+function isSequence(a, b, c) {
+  if (a.suit !== b.suit || b.suit !== c.suit) return false;
+  if (!["man","bam","circle"].includes(a.suit)) return false;
+  const vals = [a.value, b.value, c.value].sort((x,y)=>x-y);
+  return vals[1] === vals[0]+1 && vals[2] === vals[1]+1;
+}
+
+function isTriplet(a, b, c) {
+  return a.suit === b.suit && b.suit === c.suit && a.value === b.value && b.value === c.value;
+}
+
+function isPair(a, b) {
+  return a.suit === b.suit && a.value === b.value;
+}
+
+// Check if a set of tiles can form a valid winning hand
+// Returns groups if winning, null otherwise
+function findWinningGroups(tiles) {
+  if (tiles.length === 0) return [];
+  
+  // Try all possible pairs as the eye
+  for (let i = 0; i < tiles.length; i++) {
+    for (let j = i + 1; j < tiles.length; j++) {
+      if (isPair(tiles[i], tiles[j])) {
+        const rest = tiles.filter((_, idx) => idx !== i && idx !== j);
+        const groups = findSets(rest);
+        if (groups !== null) {
+          return [{ type: "pair", tiles: [tiles[i], tiles[j]] }, ...groups];
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function findSets(tiles) {
+  if (tiles.length === 0) return [];
+  
+  // Try triplet starting with first tile
+  const first = tiles[0];
+  const rest = tiles.slice(1);
+  
+  // Find triplet
+  const t1 = rest.findIndex(t => isPair(first, t));
+  if (t1 !== -1) {
+    const rest2 = rest.filter((_, i) => i !== t1);
+    const t2 = rest2.findIndex(t => isPair(first, t));
+    if (t2 !== -1) {
+      const rest3 = rest2.filter((_, i) => i !== t2);
+      const result = findSets(rest3);
+      if (result !== null) return [{ type: "triplet", tiles: [first, rest[t1], rest2[t2]] }, ...result];
+    }
+  }
+  
+  // Try sequence
+  if (["man","bam","circle"].includes(first.suit)) {
+    const v2 = rest.findIndex(t => t.suit === first.suit && t.value === first.value + 1);
+    if (v2 !== -1) {
+      const rest2 = rest.filter((_, i) => i !== v2);
+      const v3 = rest2.findIndex(t => t.suit === first.suit && t.value === first.value + 2);
+      if (v3 !== -1) {
+        const rest3 = rest2.filter((_, i) => i !== v3);
+        const result = findSets(rest3);
+        if (result !== null) return [{ type: "sequence", tiles: [first, rest[v2], rest2[v3]] }, ...result];
+      }
+    }
+  }
+  
+  return null;
+}
+
+// Check all-pairs special hand
+function isAllPairs(tiles) {
+  if (tiles.length !== 14) return false;
+  const sorted = sortHand(tiles);
+  for (let i = 0; i < sorted.length; i += 2) {
+    if (!isPair(sorted[i], sorted[i+1])) return false;
+  }
+  return true;
+}
+
+function canWin(hand, revealedSets) {
+  // hand = concealed tiles (should be 14 for self-draw or 14 after claiming)
+  const allTiles = hand.filter(t => !t.isFlower);
+  if (allTiles.length % 3 === 2) {
+    if (isAllPairs(allTiles) && allTiles.length === 14) return { win: true, type: "allPairs" };
+    const groups = findWinningGroups(allTiles);
+    if (groups) return { win: true, type: "normal", groups };
+  }
+  return { win: false };
+}
+
+// Analyze hand for coaching
+function analyzeHand(hand, discardPile, revealedSets, allPlayerDiscards) {
+  const playable = hand.filter(t => !t.isFlower);
+  
+  // Count suits
+  const suitCount = { man: 0, bam: 0, circle: 0, wind: 0, dragon: 0 };
+  playable.forEach(t => suitCount[t.suit]++);
+  
+  // Find pairs
+  const pairs = [];
+  const checked = new Set();
+  for (let i = 0; i < playable.length; i++) {
+    if (checked.has(i)) continue;
+    for (let j = i+1; j < playable.length; j++) {
+      if (isPair(playable[i], playable[j])) {
+        pairs.push([playable[i], playable[j]]);
+        checked.add(i); checked.add(j);
+        break;
+      }
+    }
+  }
+  
+  // Find partial sequences (2-tile runs needing 1 more)
+  const partials = [];
+  for (let i = 0; i < playable.length; i++) {
+    for (let j = i+1; j < playable.length; j++) {
+      const a = playable[i], b = playable[j];
+      if (a.suit !== b.suit || !["man","bam","circle"].includes(a.suit)) continue;
+      const diff = Math.abs(a.value - b.value);
+      if (diff === 1) partials.push({ tiles: [a,b], need: [Math.min(a.value,b.value)-1, Math.max(a.value,b.value)+1].filter(v=>v>=1&&v<=9).map(v=>({suit:a.suit,value:v})) });
+      if (diff === 2) partials.push({ tiles: [a,b], need: [{suit:a.suit,value:Math.min(a.value,b.value)+1}] });
+    }
+  }
+  
+  // Find isolated tiles (no useful connections)
+  const usefulIds = new Set();
+  pairs.forEach(p => p.forEach(t => usefulIds.add(t.id)));
+  partials.forEach(p => p.tiles.forEach(t => usefulIds.add(t.id)));
+  const isolated = playable.filter(t => !usefulIds.has(t.id));
+  
+  // Safe discards: tiles that appear in discard pile (others don't need them)
+  const discardedTileKeys = new Set(discardPile.map(t => `${t.suit}-${t.value}`));
+  const safeDiscards = isolated.filter(t => discardedTileKeys.has(`${t.suit}-${t.value}`));
+  
+  // Best discard recommendation
+  let bestDiscard = null;
+  let reasoning = "";
+  
+  const handSize = playable.length;
+  
+  if (handSize === 17 || handSize === 16) {
+    // Need to discard to get to 16 or 13
+    // Priority: isolated tiles that are safe > isolated tiles > break weakest partial
+    if (safeDiscards.length > 0) {
+      bestDiscard = safeDiscards[0];
+      reasoning = `${tileLabel(bestDiscard)} is isolated in your hand AND has already been discarded by others, making it very safe to throw.`;
+    } else if (isolated.length > 0) {
+      // Pick honor tiles or edge tiles as least useful
+      const honors = isolated.filter(t => t.suit === "wind" || t.suit === "dragon");
+      const edges = isolated.filter(t => ["man","bam","circle"].includes(t.suit) && (t.value === 1 || t.value === 9));
+      if (honors.length > 0) {
+        bestDiscard = honors[0];
+        reasoning = `${tileLabel(bestDiscard)} is isolated — no connections to other tiles. Honor tiles are generally safe early since they can only form triplets, not sequences.`;
+      } else if (edges.length > 0) {
+        bestDiscard = edges[0];
+        reasoning = `${tileLabel(bestDiscard)} is an edge tile with limited sequence potential. It can only connect in one direction, making it weaker than mid-suit tiles.`;
+      } else {
+        bestDiscard = isolated[0];
+        reasoning = `${tileLabel(bestDiscard)} has no pairs or sequence connections in your current hand.`;
+      }
+    } else if (pairs.length > 0) {
+      // All tiles have connections — evaluate which partial to sacrifice
+      reasoning = "Your hand has good connectivity. Consider which suit you want to commit to.";
+      bestDiscard = playable.find(t => t.suit === "wind" || t.suit === "dragon") || playable[0];
+      reasoning = `Consider breaking your weakest honor pair. ${tileLabel(bestDiscard)} may be dispensable if your suit tiles form a cleaner path to winning.`;
+    }
+  }
+  
+  // Determine hand direction
+  const dominantSuit = Object.entries(suitCount).filter(([s]) => ["man","bam","circle"].includes(s)).sort((a,b)=>b[1]-a[1])[0];
+  let handType = "mixed";
+  if (dominantSuit && dominantSuit[1] >= playable.length * 0.7) handType = `${dominantSuit[0]}-heavy`;
+  
+  // Tiles away from winning (rough estimate)
+  const sets = Math.floor(revealedSets.length);
+  const needed = 4 - sets; // sets still needed from hand
+  
+  return {
+    pairs,
+    partials,
+    isolated,
+    safeDiscards,
+    bestDiscard,
+    reasoning,
+    handType,
+    suitCount,
+    revealedCount: revealedSets.length
+  };
+}
+
+// AI discard logic
+function aiDiscard(hand) {
+  const playable = hand.filter(t => !t.isFlower);
+  const analysis = analyzeHand(playable, [], [], []);
+  if (analysis.bestDiscard) return analysis.bestDiscard;
+  
+  // Fallback: discard first isolated or honor tile
+  const honor = playable.find(t => t.suit === "wind" || t.suit === "dragon");
+  if (honor) return honor;
+  return playable[Math.floor(Math.random() * playable.length)];
+}
+
+// Check if AI can claim a discard
+function aiCanClaim(hand, discardedTile) {
+  const playable = hand.filter(t => !t.isFlower);
+  
+  // Check pong
+  const matches = playable.filter(t => isPair(t, discardedTile));
+  if (matches.length >= 2) return { type: "pong", tiles: [matches[0], matches[1], discardedTile] };
+  
+  // Check chow (sequence)
+  if (["man","bam","circle"].includes(discardedTile.suit)) {
+    const v = discardedTile.value;
+    const suitTiles = playable.filter(t => t.suit === discardedTile.suit);
+    // v-2, v-1
+    const m2 = suitTiles.find(t => t.value === v-2);
+    const m1 = suitTiles.find(t => t.value === v-1);
+    const p1 = suitTiles.find(t => t.value === v+1);
+    const p2 = suitTiles.find(t => t.value === v+2);
+    if (m2 && m1) return { type: "chow", tiles: [m2, m1, discardedTile] };
+    if (m1 && p1) return { type: "chow", tiles: [m1, discardedTile, p1] };
+    if (p1 && p2) return { type: "chow", tiles: [discardedTile, p1, p2] };
+  }
+  
+  return null;
+}
+
+// Check if player can win with a specific tile
+function canWinWithTile(hand, tile) {
+  const testHand = [...hand.filter(t => !t.isFlower), tile];
+  return canWin(testHand, []);
+}
+
+// ============================================================
+// INITIAL GAME STATE
+// ============================================================
+function initGame() {
+  let deck = shuffle(buildDeck());
+  const flowers = [];
+  const deadWall = [];
+  
+  // Separate flowers for dead wall
+  const mainDeck = deck.filter(t => !t.isFlower);
+  const flowerTiles = deck.filter(t => t.isFlower);
+  deck = shuffle([...mainDeck, ...flowerTiles]);
+  
+  // Deal 16 tiles to each player
+  const hands = [[], [], [], []];
+  const allDealt = deck.splice(0, 64);
+  for (let i = 0; i < 64; i++) hands[i % 4].push(allDealt[i]);
+  
+  // Replace flowers
+  const remainingDeck = deck;
+  for (let p = 0; p < 4; p++) {
+    const flrs = hands[p].filter(t => t.isFlower);
+    hands[p] = hands[p].filter(t => !t.isFlower);
+    for (const f of flrs) {
+      if (remainingDeck.length > 0) {
+        let replacement = remainingDeck.shift();
+        while (replacement.isFlower && remainingDeck.length > 0) {
+          flowers.push(replacement);
+          replacement = remainingDeck.shift();
+        }
+        if (!replacement.isFlower) hands[p].push(replacement);
+        else flowers.push(replacement);
+      }
+      flowers.push(f);
+    }
+  }
+  
+  // Sort player hand
+  hands[0] = sortHand(hands[0]);
+  
+  return {
+    phase: "playing",
+    deck: remainingDeck,
+    hands,
+    revealed: [[], [], [], []], // revealed sets per player
+    flowers: [[], [], [], []],  // flowers per player
+    discardPiles: [[], [], [], []], // each player's discards
+    discardPile: [], // combined visible discards
+    currentPlayer: 0,
+    drawnTile: null,
+    waitingForDiscard: true, // player 0 starts with 16 tiles, needs to discard 1 first? 
+    // Actually in TW mahjong dealer gets 17, others 16. Let's give player 0 (dealer) one extra draw
+    lastDiscard: null,
+    lastDiscardPlayer: null,
+    gameLog: ["Game started! You are the Dealer (East). You have 16 tiles. Draw a tile to begin."],
+    winner: null,
+    winInfo: null,
+    roundWind: "East",
+    playerWinds: ["East", "South", "West", "North"],
+    claimOptions: null, // { discardedTile, options: [{type, tiles}] }
+    aiThinking: false,
+    turn: 0,
+  };
+}
+
+// ============================================================
+// TILE COMPONENT
+// ============================================================
+function TileComponent({ tile, selected, onClick, small, faceDown, dimmed }) {
+  if (!tile) return null;
+  const { top, bottom } = faceDown ? { top: "", bottom: "" } : tileParts(tile);
+  const color = faceDown ? "#4a5568" : tileColor(tile);
+  
+  const size = small
+    ? { w: 34, h: 46, topFont: 13, bottomFont: 8 }
+    : { w: 50, h: 66, topFont: 20, bottomFont: 10 };
+
+  return (
+    <div
+      onClick={onClick}
+      style={{
+        width: size.w,
+        height: size.h,
+        background: faceDown
+          ? "linear-gradient(135deg, #2d3748 0%, #1a202c 100%)"
+          : selected
+            ? "linear-gradient(135deg, #fef3c7 0%, #fbbf24 100%)"
+            : "linear-gradient(135deg, #fdfcf7 0%, #f0ead8 100%)",
+        border: selected ? "2px solid #f59e0b" : faceDown ? "1px solid #4a5568" : "1px solid #c8b890",
+        borderRadius: 5,
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        cursor: onClick ? "pointer" : "default",
+        color: faceDown ? "#4a5568" : color,
+        fontWeight: "bold",
+        boxShadow: selected
+          ? "0 0 10px rgba(245,158,11,0.6), 0 3px 6px rgba(0,0,0,0.3)"
+          : "0 2px 4px rgba(0,0,0,0.3)",
+        transform: selected ? "translateY(-8px)" : "none",
+        opacity: dimmed ? 0.45 : 1,
+        transition: "all 0.15s ease",
+        flexShrink: 0,
+        userSelect: "none",
+        textAlign: "center",
+        lineHeight: 1,
+        padding: "3px 2px 2px",
+        backgroundImage: faceDown
+          ? "repeating-linear-gradient(45deg, transparent, transparent 3px, rgba(255,255,255,0.03) 3px, rgba(255,255,255,0.03) 6px)"
+          : "none",
+        gap: 1,
+      }}
+    >
+      {/* Big number / symbol on top */}
+      <div style={{ fontSize: size.topFont, fontFamily: "Georgia, serif", lineHeight: 1 }}>
+        {top}
+      </div>
+      {/* Suit label on bottom */}
+      {!faceDown && bottom && (
+        <div style={{
+          fontSize: size.bottomFont,
+          fontFamily: "Arial, sans-serif",
+          fontWeight: "600",
+          letterSpacing: 0.3,
+          color: color,
+          opacity: 0.85,
+          lineHeight: 1,
+        }}>
+          {bottom}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+// MAIN APP
+// ============================================================
+function MahjongApp() {
+  const [game, setGame] = useState(() => initGame());
+  const [selectedTile, setSelectedTile] = useState(null);
+  const [coaching, setCoaching] = useState(null);
+  const [showRules, setShowRules] = useState(false);
+  const [mobileTab, setMobileTab] = useState("game");
+  const aiTimerRef = useRef(null);
+  
+  // Coaching update whenever hand changes
+  useEffect(() => {
+    if (game.phase === "playing" && game.currentPlayer === 0) {
+      const hand = game.hands[0];
+      const analysis = analyzeHand(
+        hand,
+        game.discardPile,
+        game.revealed[0],
+        game.discardPiles
+      );
+      setCoaching(analysis);
+    }
+  }, [game.hands[0], game.drawnTile, game.currentPlayer]);
+  
+  // AI turn handler
+  useEffect(() => {
+    if (game.phase !== "playing") return;
+    if (game.currentPlayer === 0) return;
+    if (game.claimOptions) return;
+    if (game.winner) return;
+    
+    aiTimerRef.current = setTimeout(() => {
+      handleAITurn();
+    }, 1200);
+    
+    return () => clearTimeout(aiTimerRef.current);
+  }, [game.currentPlayer, game.phase, game.claimOptions]);
+  
+  const handleAITurn = useCallback(() => {
+    setGame(prev => {
+      if (prev.currentPlayer === 0) return prev;
+      const p = prev.currentPlayer;
+      const newGame = { ...prev, hands: prev.hands.map(h=>[...h]), discardPiles: prev.discardPiles.map(d=>[...d]), revealed: prev.revealed.map(r=>[...r]) };
+      
+      // Draw tile
+      if (newGame.deck.length === 0) {
+        return { ...newGame, phase: "draw", gameLog: [...newGame.gameLog, "The wall is exhausted! Draw game."] };
+      }
+      
+      let drawn = newGame.deck.shift();
+      while (drawn.isFlower && newGame.deck.length > 0) {
+        newGame.flowers[p].push(drawn);
+        drawn = newGame.deck.shift();
+      }
+      
+      if (!drawn.isFlower) {
+        newGame.hands[p].push(drawn);
+        
+        // Check AI win on self-draw
+        const winCheck = canWin(newGame.hands[p].filter(t=>!t.isFlower), newGame.revealed[p]);
+        if (winCheck.win) {
+          return { ...newGame, winner: p, winInfo: winCheck, phase: "won", gameLog: [...newGame.gameLog, `Player ${p+1} (${newGame.playerWinds[p]}) wins by self-draw! 🎉`] };
+        }
+        
+        // AI discards
+        const discard = aiDiscard(newGame.hands[p]);
+        newGame.hands[p] = newGame.hands[p].filter(t => t.id !== discard.id);
+        newGame.discardPiles[p].push(discard);
+        newGame.discardPile = [...newGame.discardPile, discard];
+        newGame.lastDiscard = discard;
+        newGame.lastDiscardPlayer = p;
+        
+        const log = `${newGame.playerWinds[p]} discards ${tileLabel(discard)}`;
+        newGame.gameLog = [...newGame.gameLog.slice(-20), log];
+        
+        // Check if player 0 can claim
+        const claim = checkPlayerClaim(newGame.hands[0], discard);
+        
+        // Check if player can win with this discard
+        const playerWin = canWinWithTile(newGame.hands[0], discard);
+        if (playerWin.win) {
+          if (claim) claim.canWin = true;
+          else {
+            // offer win only
+            newGame.claimOptions = { discardedTile: discard, fromPlayer: p, options: [{ type: "win", tiles: [discard] }] };
+            newGame.currentPlayer = 0;
+            return newGame;
+          }
+        }
+        
+        if (claim) {
+          newGame.claimOptions = { discardedTile: discard, fromPlayer: p, options: [claim, ...(playerWin.win ? [{ type: "win", tiles: [discard] }] : [])] };
+          newGame.currentPlayer = 0;
+        } else {
+          // Move to next player (could be player 0)
+          newGame.currentPlayer = (p + 1) % 4;
+        }
+      }
+      
+      return newGame;
+    });
+  }, []);
+  
+  function checkPlayerClaim(hand, tile) {
+    return aiCanClaim(hand, tile);
+  }
+  
+  // Player draws a tile
+  const handleDraw = useCallback(() => {
+    setGame(prev => {
+      if (prev.currentPlayer !== 0) return prev;
+      if (prev.drawnTile) return prev;
+      if (prev.deck.length === 0) return { ...prev, phase: "draw" };
+      
+      let drawn = prev.deck[0];
+      const newDeck = prev.deck.slice(1);
+      let flowers = [...prev.flowers[0]];
+      let extraDraws = [];
+      
+      while (drawn && drawn.isFlower) {
+        flowers.push(drawn);
+        drawn = newDeck.shift();
+      }
+      
+      const newHand = drawn ? [...prev.hands[0], drawn] : [...prev.hands[0]];
+      
+      const winCheck = drawn ? canWinWithTile(prev.hands[0], drawn) : { win: false };
+      
+      const log = drawn 
+        ? `You drew ${tileLabel(drawn)}${winCheck.win ? " — You can win! 🎉" : ""}`
+        : "No tiles left!";
+      
+      return {
+        ...prev,
+        deck: newDeck,
+        drawnTile: drawn || null,
+        hands: prev.hands.map((h, i) => i === 0 ? newHand : h),
+        flowers: prev.flowers.map((f, i) => i === 0 ? flowers : f),
+        gameLog: [...prev.gameLog.slice(-20), log],
+        ...(winCheck.win ? {} : {}),
+      };
+    });
+    setSelectedTile(null);
+  }, []);
+  
+  // Player discards a tile
+  const handleDiscard = useCallback((tile) => {
+    setGame(prev => {
+      if (prev.currentPlayer !== 0) return prev;
+      if (!prev.drawnTile && prev.hands[0].length <= 16) {
+        // First discard (dealer starts with 16, or player needs to discard before drawing)
+        // Allow discard
+      }
+      
+      const newHand = prev.hands[0].filter(t => t.id !== tile.id);
+      const newDiscards = [...prev.discardPiles[0], tile];
+      const newDiscardPile = [...prev.discardPile, tile];
+      
+      // Check AI claims
+      let claimOptions = null;
+      let nextPlayer = 1;
+      
+      // Check each AI for claim
+      for (let p = 1; p < 4; p++) {
+        const winCheck = canWinWithTile(prev.hands[p], tile);
+        const claim = aiCanClaim(prev.hands[p], tile);
+        
+        if (winCheck.win) {
+          // AI wins
+          const finalHand = [...prev.hands[p].filter(t=>!t.isFlower), tile];
+          return {
+            ...prev,
+            hands: prev.hands.map((h,i) => i===0 ? newHand : h),
+            discardPiles: prev.discardPiles.map((d,i) => i===0 ? newDiscards : d),
+            discardPile: newDiscardPile,
+            winner: p,
+            phase: "won",
+            gameLog: [...prev.gameLog.slice(-20), `You discarded ${tileLabel(tile)}. Player ${p+1} (${prev.playerWinds[p]}) wins on your discard! 😱`]
+          };
+        }
+        
+        if (claim && Math.random() > 0.4) {
+          // AI claims
+          const aiHand = prev.hands[p].filter(t => !claim.tiles.slice(0,2).some(ct => ct.id === t.id));
+          const discard = aiDiscard(aiHand);
+          const finalHand = aiHand.filter(t => t.id !== discard.id);
+          const newRevealed = [...prev.revealed[p], { type: claim.type, tiles: claim.tiles }];
+          const aiDiscards = [...prev.discardPiles[p], discard];
+          
+          return {
+            ...prev,
+            hands: prev.hands.map((h,i) => i===0 ? newHand : i===p ? finalHand : h),
+            revealed: prev.revealed.map((r,i) => i===p ? newRevealed : r),
+            discardPiles: prev.discardPiles.map((d,i) => i===0 ? newDiscards : i===p ? aiDiscards : d),
+            discardPile: [...newDiscardPile, discard],
+            lastDiscard: discard,
+            lastDiscardPlayer: p,
+            drawnTile: null,
+            currentPlayer: (p+1) % 4,
+            gameLog: [...prev.gameLog.slice(-20), `You discarded ${tileLabel(tile)}. ${prev.playerWinds[p]} claims ${claim.type.toUpperCase()} and discards ${tileLabel(discard)}.`]
+          };
+        }
+      }
+      
+      const log = `You discarded ${tileLabel(tile)}`;
+      
+      return {
+        ...prev,
+        hands: prev.hands.map((h, i) => i === 0 ? newHand : h),
+        discardPiles: prev.discardPiles.map((d, i) => i === 0 ? newDiscards : d),
+        discardPile: newDiscardPile,
+        lastDiscard: tile,
+        lastDiscardPlayer: 0,
+        drawnTile: null,
+        currentPlayer: 1,
+        gameLog: [...prev.gameLog.slice(-20), log],
+        claimOptions: null,
+      };
+    });
+    setSelectedTile(null);
+  }, []);
+  
+  // Player claims a discard
+  const handleClaim = useCallback((option) => {
+    setGame(prev => {
+      if (!prev.claimOptions) return prev;
+      const { discardedTile, fromPlayer } = prev.claimOptions;
+      
+      if (option.type === "skip") {
+        return {
+          ...prev,
+          claimOptions: null,
+          currentPlayer: (fromPlayer + 1) % 4 === 0 ? 1 : (fromPlayer + 1) % 4,
+        };
+      }
+      
+      if (option.type === "win") {
+        return {
+          ...prev,
+          claimOptions: null,
+          winner: 0,
+          phase: "won",
+          hands: prev.hands.map((h,i) => i===0 ? [...h, discardedTile] : h),
+          gameLog: [...prev.gameLog.slice(-20), `You win by claiming ${tileLabel(discardedTile)}! 🎉`]
+        };
+      }
+      
+      // Pong or Chow claim
+      const tilesToRemove = option.tiles.filter(t => t.id !== discardedTile.id);
+      const newHand = prev.hands[0].filter(t => !tilesToRemove.some(r => r.id === t.id));
+      const newRevealed = [...prev.revealed[0], { type: option.type, tiles: option.tiles }];
+      
+      return {
+        ...prev,
+        hands: prev.hands.map((h,i) => i===0 ? newHand : h),
+        revealed: prev.revealed.map((r,i) => i===0 ? newRevealed : r),
+        claimOptions: null,
+        drawnTile: discardedTile,
+        currentPlayer: 0,
+        gameLog: [...prev.gameLog.slice(-20), `You claimed ${option.type.toUpperCase()} on ${tileLabel(discardedTile)}! Now discard a tile.`]
+      };
+    });
+    setSelectedTile(null);
+  }, []);
+  
+  const handleWin = useCallback(() => {
+    setGame(prev => {
+      return {
+        ...prev,
+        winner: 0,
+        phase: "won",
+        gameLog: [...prev.gameLog.slice(-20), "You declare a winning hand! 🎉"]
+      };
+    });
+  }, []);
+  
+  const newGame = useCallback(() => {
+    setGame(initGame());
+    setSelectedTile(null);
+    setCoaching(null);
+  }, []);
+  
+  const { hands, deck, discardPile, discardPiles, revealed, flowers, currentPlayer, drawnTile, lastDiscard, gameLog, winner, phase, playerWinds, claimOptions } = game;
+  const playerHand = sortHand(hands[0]);
+  const isMyTurn = currentPlayer === 0;
+
+  // Check if player can win with drawn tile
+  const canWinNow = drawnTile && canWin(playerHand.filter(t => !t.isFlower), revealed[0]).win;
+
+  const COLORS = {
+    bg: "#0a1628",
+    table: "#0d2418",
+    felt: "#0f3020",
+    border: "#1a4530",
+    gold: "#d4a843",
+    goldLight: "#f0c060",
+    text: "#e8dcc8",
+    textMuted: "#8a7a5a",
+    panel: "#071020",
+    accent: "#c8a030",
+  };
+
+  const opponentLabels = ["You (East)", "South (AI)", "West (AI)", "North (AI)"];
+
+  // ── COACHING PANEL (shared between mobile/desktop) ──────────────────────
+  const CoachPanel = () => (
+    <div style={{ flex: 1, overflow: "auto", padding: 14, display: "flex", flexDirection: "column", gap: 12 }}>
+      {coaching && isMyTurn && (
+        <>
+          {coaching.bestDiscard && (
+            <div style={{ background: "rgba(212,168,67,0.08)", border: "1px solid rgba(212,168,67,0.25)", borderRadius: 6, padding: "10px 12px" }}>
+              <div style={{ fontSize: 11, color: COLORS.gold, fontFamily: "'Cinzel', serif", marginBottom: 6, letterSpacing: 0.5 }}>RECOMMENDED DISCARD</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                <TileComponent tile={coaching.bestDiscard} small />
+                <div style={{ fontSize: 14, fontWeight: "bold", color: tileColor(coaching.bestDiscard) }}>{tileLabel(coaching.bestDiscard)}</div>
+              </div>
+              <div style={{ fontSize: 12, color: COLORS.textMuted, lineHeight: 1.6 }}>{coaching.reasoning}</div>
+            </div>
+          )}
+          <div style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${COLORS.border}`, borderRadius: 6, padding: "10px 12px" }}>
+            <div style={{ fontSize: 11, color: COLORS.gold, fontFamily: "'Cinzel', serif", marginBottom: 8, letterSpacing: 0.5 }}>HAND STRUCTURE</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+              {coaching.pairs.length > 0 && <div style={{ fontSize: 12, color: COLORS.text }}><span style={{ color: "#60a5fa" }}>Pairs ({coaching.pairs.length}):</span> <span style={{ color: COLORS.textMuted }}>{coaching.pairs.map(p => tileLabel(p[0])).join(", ")}</span></div>}
+              {coaching.partials.length > 0 && <div style={{ fontSize: 12, color: COLORS.text }}><span style={{ color: "#4ade80" }}>Partials ({coaching.partials.length}):</span> <span style={{ color: COLORS.textMuted }}>{coaching.partials.slice(0,3).map(p => `${tileLabel(p.tiles[0])}-${tileLabel(p.tiles[1])}`).join(", ")}</span></div>}
+              {coaching.isolated.length > 0 && <div style={{ fontSize: 12, color: COLORS.text }}><span style={{ color: "#f87171" }}>Isolated ({coaching.isolated.length}):</span> <span style={{ color: COLORS.textMuted }}>{coaching.isolated.map(t => tileLabel(t)).join(", ")}</span></div>}
+              {coaching.safeDiscards.length > 0 && <div style={{ fontSize: 12, color: COLORS.text }}><span style={{ color: "#22c55e" }}>Safe to discard:</span> <span style={{ color: COLORS.textMuted }}>{coaching.safeDiscards.map(t => tileLabel(t)).join(", ")}</span></div>}
+            </div>
+          </div>
+          <div style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${COLORS.border}`, borderRadius: 6, padding: "10px 12px" }}>
+            <div style={{ fontSize: 11, color: COLORS.gold, fontFamily: "'Cinzel', serif", marginBottom: 8, letterSpacing: 0.5 }}>SUIT DISTRIBUTION</div>
+            {Object.entries(coaching.suitCount).filter(([,v])=>v>0).map(([suit, count]) => (
+              <div key={suit} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                <div style={{ fontSize: 11, color: COLORS.textMuted, width: 44 }}>{suit}</div>
+                <div style={{ flex: 1, height: 6, background: "#1a3040", borderRadius: 3, overflow: "hidden" }}>
+                  <div style={{ height: "100%", width: `${Math.min(100, count * 14)}%`, background: suit==="man"?"#f97316":suit==="bam"?"#4ade80":suit==="circle"?"#60a5fa":suit==="wind"?"#a78bfa":"#fbbf24", borderRadius: 3 }} />
+                </div>
+                <div style={{ fontSize: 11, color: COLORS.text, width: 16 }}>{count}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${COLORS.border}`, borderRadius: 6, padding: "10px 12px" }}>
+            <div style={{ fontSize: 11, color: COLORS.gold, fontFamily: "'Cinzel', serif", marginBottom: 8, letterSpacing: 0.5 }}>STRATEGIC TIPS</div>
+            <div style={{ fontSize: 12, color: COLORS.textMuted, lineHeight: 1.8 }}>
+              {coaching.pairs.length >= 6 && playerHand.filter(t=>!t.isFlower).length >= 14
+                ? "🎯 Many pairs — consider All Pairs hand!"
+                : coaching.suitCount.man >= 7 || coaching.suitCount.bam >= 7 || coaching.suitCount.circle >= 7
+                  ? "🎯 Heavily one suit — consider a pure suit hand!"
+                  : coaching.partials.length >= 3
+                    ? "🎯 Good sequence potential. Stay patient."
+                    : coaching.isolated.length > 3
+                      ? "⚠️ Many isolated tiles. Dump honors and edges first."
+                      : "✅ Balanced hand. Build sequences and look for fast wins."}
+            </div>
+            {revealed[0].length > 0 && <div style={{ fontSize: 12, color: COLORS.textMuted, marginTop: 6, lineHeight: 1.6 }}>⚡ Open sets visible — others may avoid discarding your suit.</div>}
+          </div>
+        </>
+      )}
+      {!isMyTurn && (
+        <div style={{ fontSize: 12, color: COLORS.textMuted, textAlign: "center", padding: 20 }}>
+          <div style={{ fontSize: 24, marginBottom: 8 }}>⏳</div>
+          Waiting for opponents...
+          <br /><br />
+          <span style={{ fontSize: 11 }}>Claim any discard for Pong or Chow.</span>
+        </div>
+      )}
+      <div style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${COLORS.border}`, borderRadius: 6, padding: "10px 12px", marginTop: "auto" }}>
+        <div style={{ fontSize: 11, color: COLORS.gold, fontFamily: "'Cinzel', serif", marginBottom: 6, letterSpacing: 0.5 }}>TILE LEGEND</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 3 }}>
+          {[{ label: "Man — Characters", color: "#f97316" }, { label: "Bam — Bamboo", color: "#4ade80" }, { label: "Cir — Circles", color: "#60a5fa" }, { label: "E/S/W/N — Winds", color: "#a78bfa" }, { label: "中發白 — Dragons", color: "#fbbf24" }, { label: "🌸 — Flowers", color: "#22c55e" }].map(({ label, color }) => (
+            <div key={label} style={{ fontSize: 10, color, display: "flex", alignItems: "center", gap: 4 }}>
+              <div style={{ width: 6, height: 6, borderRadius: "50%", background: color, flexShrink: 0 }} />
+              {label}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+
+  // ── GAME TABLE (shared) ──────────────────────────────────────────────────
+  const GameTable = ({ compact }) => (
+    <div style={{
+      flex: 1,
+      display: "flex",
+      flexDirection: "column",
+      background: `radial-gradient(ellipse at center, ${COLORS.felt} 0%, ${COLORS.table} 70%, ${COLORS.bg} 100%)`,
+      padding: compact ? 8 : 16,
+      gap: compact ? 6 : 12,
+      minWidth: 0,
+      overflow: "auto",
+    }}>
+      {/* Opponent at top (West) */}
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
+        <div style={{ fontSize: 10, color: currentPlayer === 2 ? COLORS.goldLight : COLORS.textMuted, fontFamily: "'Cinzel', serif", letterSpacing: 1 }}>
+          {currentPlayer === 2 && <span className="pulsing">▼ </span>}WEST · {hands[2].length}
+        </div>
+        <div style={{ display: "flex", gap: 2, flexWrap: "wrap", justifyContent: "center" }}>
+          {revealed[2].map((set, si) => (
+            <div key={si} style={{ display: "flex", gap: 1, background: "rgba(212,168,67,0.1)", padding: "2px 3px", borderRadius: 3, border: "1px solid rgba(212,168,67,0.2)" }}>
+              {set.tiles.map((t, ti) => <TileComponent key={ti} tile={t} small />)}
+            </div>
+          ))}
+          {hands[2].slice(0, compact ? 6 : 8).map((_, i) => <TileComponent key={i} tile={_} faceDown small />)}
+        </div>
+        {discardPiles[2].length > 0 && (
+          <div style={{ display: "flex", gap: 2, flexWrap: "wrap", justifyContent: "center" }}>
+            {discardPiles[2].slice(-5).map((t, i) => <TileComponent key={i} tile={t} small />)}
+          </div>
+        )}
+      </div>
+
+      {/* Middle row */}
+      <div style={{ flex: 1, display: "flex", gap: compact ? 6 : 12, minHeight: compact ? 130 : 200 }}>
+        {/* South */}
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 3, minWidth: compact ? 40 : 60 }}>
+          <div style={{ fontSize: 9, color: currentPlayer === 1 ? COLORS.goldLight : COLORS.textMuted, fontFamily: "'Cinzel', serif", writingMode: "vertical-rl" }}>
+            {currentPlayer === 1 && "▶ "}SOUTH
+          </div>
+          {revealed[1].map((set, si) => (
+            <div key={si} style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+              {set.tiles.map((t, ti) => <TileComponent key={ti} tile={t} small />)}
+            </div>
+          ))}
+          {hands[1].slice(0, compact ? 3 : 5).map((_, i) => <TileComponent key={i} tile={_} faceDown small />)}
+          {discardPiles[1].slice(-3).map((t, i) => <TileComponent key={i} tile={t} small />)}
+        </div>
+
+        {/* Center discard area */}
+        <div style={{
+          flex: 1,
+          background: `radial-gradient(ellipse, rgba(15,48,32,0.8), rgba(10,22,40,0.6))`,
+          border: `1px solid ${COLORS.border}`,
+          borderRadius: 8,
+          padding: compact ? 6 : 12,
+          display: "flex",
+          flexDirection: "column",
+          gap: 6,
+          overflow: "hidden",
+        }}>
+          <div style={{ fontSize: 10, color: COLORS.textMuted, fontFamily: "'Cinzel', serif", letterSpacing: 1, textAlign: "center" }}>DISCARD PILE</div>
+          <div style={{ flex: 1, display: "flex", flexWrap: "wrap", gap: 2, alignContent: "flex-start", overflow: "auto" }}>
+            {discardPile.slice(-(compact ? 20 : 30)).map((t, i) => (
+              <TileComponent key={i} tile={t} small dimmed={lastDiscard && t.id !== lastDiscard.id && i < discardPile.length - 1} />
+            ))}
+          </div>
+          <div style={{ background: "rgba(0,0,0,0.3)", borderRadius: 4, padding: "5px 7px", maxHeight: compact ? 56 : 80, overflow: "auto", border: `1px solid ${COLORS.border}` }}>
+            {gameLog.slice(-3).map((log, i) => (
+              <div key={i} style={{ fontSize: 10, color: i === gameLog.slice(-3).length - 1 ? COLORS.text : COLORS.textMuted, lineHeight: 1.5 }}>{log}</div>
+            ))}
+          </div>
+        </div>
+
+        {/* North */}
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 3, minWidth: compact ? 40 : 60 }}>
+          <div style={{ fontSize: 9, color: currentPlayer === 3 ? COLORS.goldLight : COLORS.textMuted, fontFamily: "'Cinzel', serif", writingMode: "vertical-rl" }}>
+            {currentPlayer === 3 && "◀ "}NORTH
+          </div>
+          {revealed[3].map((set, si) => (
+            <div key={si} style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+              {set.tiles.map((t, ti) => <TileComponent key={ti} tile={t} small />)}
+            </div>
+          ))}
+          {hands[3].slice(0, compact ? 3 : 5).map((_, i) => <TileComponent key={i} tile={_} faceDown small />)}
+          {discardPiles[3].slice(-3).map((t, i) => <TileComponent key={i} tile={t} small />)}
+        </div>
+      </div>
+
+      {/* Player hand area */}
+      <div style={{ background: "rgba(0,0,0,0.35)", borderRadius: 8, border: `1px solid ${COLORS.border}`, padding: compact ? "8px 10px" : "12px 16px" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+          <div style={{ fontSize: 11, color: currentPlayer === 0 ? COLORS.goldLight : COLORS.textMuted, fontFamily: "'Cinzel', serif", letterSpacing: 0.5 }}>
+            {currentPlayer === 0 && <span className="pulsing">▲ YOUR TURN · </span>}
+            YOUR HAND · {playerHand.filter(t=>!t.isFlower).length} tiles
+          </div>
+          <div style={{ display: "flex", gap: 6 }}>
+            {flowers[0].length > 0 && <div style={{ fontSize: 10, color: "#22c55e" }}>🌸×{flowers[0].length}</div>}
+            {revealed[0].length > 0 && <div style={{ fontSize: 10, color: COLORS.textMuted }}>{revealed[0].length} set(s)</div>}
+          </div>
+        </div>
+
+        {/* Claim banner */}
+        {claimOptions && (
+          <div style={{ background: "rgba(30,58,138,0.3)", border: "1px solid #3b6ea0", borderRadius: 6, padding: "8px 10px", marginBottom: 8, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 11, color: "#93c5fd", fontFamily: "'Cinzel', serif" }}>CLAIM {tileLabel(claimOptions.discardedTile)}?</span>
+            {claimOptions.options.map((opt, i) => (
+              <button key={i} className={opt.type === "win" ? "win-btn" : "claim-btn"} onClick={() => handleClaim(opt)} style={{ fontSize: 12, padding: "6px 12px" }}>
+                {opt.type === "win" ? "🏆 WIN!" : opt.type === "pong" ? "PONG" : "CHOW"}
+              </button>
+            ))}
+            <button className="btn-outline" onClick={() => handleClaim({ type: "skip" })} style={{ fontSize: 11, padding: "5px 10px" }}>Skip</button>
+          </div>
+        )}
+
+        {/* Revealed sets */}
+        {revealed[0].length > 0 && (
+          <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
+            {revealed[0].map((set, si) => (
+              <div key={si} style={{ display: "flex", gap: 2, background: "rgba(212,168,67,0.15)", padding: "3px 5px", borderRadius: 4, border: "1px solid rgba(212,168,67,0.3)" }}>
+                <span style={{ fontSize: 8, color: COLORS.textMuted, alignSelf: "center", marginRight: 2 }}>{set.type.toUpperCase()}</span>
+                {set.tiles.map((t, ti) => <TileComponent key={ti} tile={t} small />)}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Hand tiles — horizontally scrollable on mobile */}
+        <div style={{ overflowX: "auto", paddingBottom: 4 }}>
+          <div style={{ display: "flex", gap: compact ? 3 : 4, alignItems: "flex-end", minWidth: "min-content" }}>
+            {playerHand.map((tile) => (
+              <div key={tile.id} className="tile-hover">
+                <TileComponent
+                  tile={tile}
+                  selected={selectedTile && selectedTile.id === tile.id}
+                  onClick={() => {
+                    if (!isMyTurn && !claimOptions) return;
+                    if (claimOptions) return;
+                    if (drawnTile || playerHand.length > 16) {
+                      if (selectedTile && selectedTile.id === tile.id) {
+                        handleDiscard(tile);
+                      } else {
+                        setSelectedTile(tile);
+                      }
+                    }
+                  }}
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Action buttons */}
+        <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap", alignItems: "center" }}>
+          {isMyTurn && !drawnTile && !claimOptions && (
+            <button className="btn-gold" onClick={handleDraw} style={{ fontSize: 13, padding: "9px 20px" }}>Draw Tile</button>
+          )}
+          {selectedTile && drawnTile && isMyTurn && !claimOptions && (
+            <button className="btn-gold" onClick={() => handleDiscard(selectedTile)} style={{ fontSize: 13, padding: "9px 16px" }}>
+              Discard {tileLabel(selectedTile)}
+            </button>
+          )}
+          {canWinNow && (
+            <button className="win-btn" onClick={handleWin} style={{ fontSize: 14, padding: "9px 18px" }}>🏆 WIN!</button>
+          )}
+          {isMyTurn && drawnTile && !claimOptions && !canWinNow && (
+            <div style={{ fontSize: 10, color: COLORS.textMuted }}>Tap a tile to select · tap again or hit Discard</div>
+          )}
+          {!isMyTurn && !claimOptions && (
+            <div style={{ fontSize: 11, color: COLORS.textMuted }} className="pulsing">
+              Waiting for {opponentLabels[currentPlayer]}…
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={{ minHeight: "100dvh", background: COLORS.bg, color: COLORS.text, fontFamily: "'Noto Sans SC', 'Georgia', serif", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;600;700&family=Cinzel:wght@400;600&display=swap');
+        * { box-sizing: border-box; }
+        ::-webkit-scrollbar { width: 4px; height: 4px; }
+        ::-webkit-scrollbar-track { background: #071020; }
+        ::-webkit-scrollbar-thumb { background: #d4a843; border-radius: 2px; }
+        .tile-hover:hover { transform: translateY(-3px); }
+        .btn-gold { background: linear-gradient(135deg, #d4a843, #f0c060); color: #0a0a0a; border: none; padding: 8px 18px; border-radius: 4px; cursor: pointer; font-weight: bold; font-family: 'Cinzel', serif; font-size: 13px; transition: all 0.2s; letter-spacing: 0.5px; -webkit-tap-highlight-color: transparent; }
+        .btn-gold:active { transform: scale(0.97); }
+        .btn-outline { background: transparent; color: #d4a843; border: 1px solid #d4a843; padding: 6px 14px; border-radius: 4px; cursor: pointer; font-family: 'Cinzel', serif; font-size: 12px; transition: all 0.2s; -webkit-tap-highlight-color: transparent; }
+        .btn-outline:active { background: rgba(212,168,67,0.15); }
+        .pulsing { animation: pulse 1.5s ease-in-out infinite; }
+        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.6} }
+        .claim-btn { background: linear-gradient(135deg, #1a3a5c, #0d2040); color: #60a5fa; border: 1px solid #3b6ea0; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 13px; font-weight: bold; font-family: 'Cinzel', serif; -webkit-tap-highlight-color: transparent; }
+        .claim-btn:active { opacity: 0.8; }
+        .win-btn { background: linear-gradient(135deg, #7c2d12, #dc2626); color: white; border: 1px solid #ef4444; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: bold; font-family: 'Cinzel', serif; animation: pulse 1s ease-in-out infinite; -webkit-tap-highlight-color: transparent; }
+        .tab-btn { background: transparent; border: none; color: #8a7a5a; cursor: pointer; padding: 10px 0; font-size: 11px; font-family: 'Cinzel', serif; letter-spacing: 0.5px; flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; -webkit-tap-highlight-color: transparent; transition: color 0.2s; }
+        .tab-btn.active { color: #d4a843; }
+        .tab-btn.active .tab-indicator { opacity: 1; }
+        .tab-indicator { width: 20px; height: 2px; background: #d4a843; border-radius: 1px; opacity: 0; transition: opacity 0.2s; }
+
+        /* ── RESPONSIVE BREAKPOINTS ─────────────────────────── */
+        .desktop-layout { display: flex; }
+        .mobile-layout { display: none; }
+        .mobile-tabbar { display: none; }
+
+        @media (max-width: 700px) {
+          .desktop-layout { display: none !important; }
+          .mobile-layout { display: flex !important; flex-direction: column; flex: 1; overflow: hidden; min-height: 0; }
+          .mobile-tabbar { display: flex !important; }
+          .header-subtitle { display: none; }
+          .header-tiles-count { display: none; }
+          .header-title { font-size: 14px !important; letter-spacing: 1px !important; }
+        }
+      `}</style>
+
+      {/* ── HEADER ──────────────────────────────────────────────────────── */}
+      <div style={{ borderBottom: `1px solid ${COLORS.border}`, background: COLORS.panel, padding: "8px 14px", display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ fontSize: 24, lineHeight: 1 }}>🀄</span>
+          <div>
+            <div className="header-title" style={{ fontFamily: "'Cinzel', serif", fontSize: 17, fontWeight: 600, color: COLORS.gold, letterSpacing: 2 }}>TAIWANESE MAHJONG</div>
+            <div className="header-subtitle" style={{ fontSize: 10, color: COLORS.textMuted, letterSpacing: 1 }}>COACHING EDITION · Wind: {game.roundWind}</div>
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <span className="header-tiles-count" style={{ fontSize: 11, color: COLORS.gold }}>🃏 {deck.length}</span>
+          <button className="btn-outline" onClick={() => setShowRules(!showRules)} style={{ fontSize: 11, padding: "5px 10px" }}>Rules</button>
+          <button className="btn-gold" onClick={newGame} style={{ fontSize: 12, padding: "6px 14px" }}>New</button>
+        </div>
+      </div>
+
+      {/* Rules */}
+      {showRules && (
+        <div style={{ background: "#071828", borderBottom: `1px solid ${COLORS.border}`, padding: "10px 14px", fontSize: 11, color: COLORS.textMuted, lineHeight: 1.8 }}>
+          <strong style={{ color: COLORS.gold }}>Rules:</strong> 4 sets + 1 pair to win. 16 tiles each. Chow (sequence) or Pong (triplet) from any player. Flowers replaced automatically. Win by self-draw or claiming a discard. Special: All Pairs.&nbsp;
+          <button className="btn-outline" onClick={() => setShowRules(false)} style={{ fontSize: 10, padding: "2px 7px" }}>✕</button>
+        </div>
+      )}
+
+      {/* Win overlay */}
+      {winner !== null && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 100, background: "rgba(0,0,0,0.88)", display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 20, padding: 24 }}>
+          <div style={{ fontSize: 60 }}>{winner === 0 ? "🎉" : "😔"}</div>
+          <div style={{ fontFamily: "'Cinzel', serif", fontSize: 28, color: COLORS.gold, textAlign: "center" }}>{winner === 0 ? "YOU WIN!" : `${opponentLabels[winner]} Wins!`}</div>
+          <div style={{ color: COLORS.textMuted, fontSize: 13, textAlign: "center" }}>{gameLog[gameLog.length - 1]}</div>
+          <button className="btn-gold" onClick={newGame} style={{ marginTop: 8, fontSize: 15, padding: "12px 32px" }}>Play Again</button>
+        </div>
+      )}
+
+      {/* ── DESKTOP LAYOUT (side-by-side, >700px) ───────────────────────── */}
+      <div className="desktop-layout" style={{ flex: 1, overflow: "hidden", minHeight: 0 }}>
+        <GameTable compact={false} />
+        <div style={{ width: 280, background: COLORS.panel, borderLeft: `1px solid ${COLORS.border}`, display: "flex", flexDirection: "column", overflow: "hidden", flexShrink: 0 }}>
+          <div style={{ padding: "12px 16px", borderBottom: `1px solid ${COLORS.border}`, fontFamily: "'Cinzel', serif", fontSize: 13, color: COLORS.gold, letterSpacing: 1 }}>🎓 COACH ANALYSIS</div>
+          <CoachPanel />
+        </div>
+      </div>
+
+      {/* ── MOBILE LAYOUT (stacked, ≤700px) ────────────────────────────── */}
+      <div className="mobile-layout">
+        {/* Tab content */}
+        <div style={{ flex: 1, overflow: "hidden", minHeight: 0, display: "flex", flexDirection: "column" }}>
+          {mobileTab === "game"
+            ? <GameTable compact={true} />
+            : (
+              <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column", background: COLORS.panel }}>
+                <div style={{ padding: "10px 14px", borderBottom: `1px solid ${COLORS.border}`, fontFamily: "'Cinzel', serif", fontSize: 12, color: COLORS.gold, letterSpacing: 1 }}>🎓 COACH ANALYSIS</div>
+                <CoachPanel />
+              </div>
+            )
+          }
+        </div>
+
+        {/* Bottom tab bar */}
+        <div className="mobile-tabbar" style={{ background: COLORS.panel, borderTop: `1px solid ${COLORS.border}`, flexShrink: 0, paddingBottom: "env(safe-area-inset-bottom, 0px)" }}>
+          {[
+            { id: "game", icon: "🀄", label: "GAME" },
+            { id: "coach", icon: "🎓", label: "COACH" + (isMyTurn && coaching?.bestDiscard ? " ●" : "") },
+          ].map(tab => (
+            <button key={tab.id} className={`tab-btn ${mobileTab === tab.id ? "active" : ""}`} onClick={() => setMobileTab(tab.id)}>
+              <div className="tab-indicator" />
+              <span style={{ fontSize: 18 }}>{tab.icon}</span>
+              <span>{tab.label}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<MahjongApp />);
+  </script>
+</body>
+</html>
