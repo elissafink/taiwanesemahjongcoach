@@ -218,100 +218,179 @@ function canWin(hand, revealedSets) {
 // Analyze hand for coaching
 function analyzeHand(hand, discardPile, revealedSets, allPlayerDiscards) {
   const playable = hand.filter(t => !t.isFlower);
-  
+
   // Count suits
   const suitCount = { man: 0, bam: 0, circle: 0, wind: 0, dragon: 0 };
   playable.forEach(t => suitCount[t.suit]++);
-  
-  // Find pairs
-  const pairs = [];
-  const checked = new Set();
+
+  // ── FIND TRIPLETS (3 of same tile) ──────────────────────────────────────
+  const triplets = [];
+  const tripletIds = new Set();
   for (let i = 0; i < playable.length; i++) {
-    if (checked.has(i)) continue;
-    for (let j = i+1; j < playable.length; j++) {
+    for (let j = i + 1; j < playable.length; j++) {
+      for (let k = j + 1; k < playable.length; k++) {
+        if (isPair(playable[i], playable[j]) && isPair(playable[j], playable[k])) {
+          if (!tripletIds.has(playable[i].id)) {
+            triplets.push([playable[i], playable[j], playable[k]]);
+            tripletIds.add(playable[i].id);
+            tripletIds.add(playable[j].id);
+            tripletIds.add(playable[k].id);
+          }
+        }
+      }
+    }
+  }
+
+  // ── FIND PAIRS (2 of same tile, not already in a triplet) ───────────────
+  const pairs = [];
+  const pairIds = new Set();
+  for (let i = 0; i < playable.length; i++) {
+    if (tripletIds.has(playable[i].id) || pairIds.has(playable[i].id)) continue;
+    for (let j = i + 1; j < playable.length; j++) {
+      if (tripletIds.has(playable[j].id) || pairIds.has(playable[j].id)) continue;
       if (isPair(playable[i], playable[j])) {
         pairs.push([playable[i], playable[j]]);
-        checked.add(i); checked.add(j);
+        pairIds.add(playable[i].id);
+        pairIds.add(playable[j].id);
         break;
       }
     }
   }
-  
-  // Find partial sequences (2-tile runs needing 1 more)
-  const partials = [];
-  for (let i = 0; i < playable.length; i++) {
-    for (let j = i+1; j < playable.length; j++) {
-      const a = playable[i], b = playable[j];
-      if (a.suit !== b.suit || !["man","bam","circle"].includes(a.suit)) continue;
-      const diff = Math.abs(a.value - b.value);
-      if (diff === 1) partials.push({ tiles: [a,b], need: [Math.min(a.value,b.value)-1, Math.max(a.value,b.value)+1].filter(v=>v>=1&&v<=9).map(v=>({suit:a.suit,value:v})) });
-      if (diff === 2) partials.push({ tiles: [a,b], need: [{suit:a.suit,value:Math.min(a.value,b.value)+1}] });
+
+  // ── FIND COMPLETE SEQUENCES ──────────────────────────────────────────────
+  const sequences = [];
+  const sequenceIds = new Set();
+  const suitTiles = {};
+  playable.forEach(t => {
+    if (!["man","bam","circle"].includes(t.suit)) return;
+    if (!suitTiles[t.suit]) suitTiles[t.suit] = [];
+    suitTiles[t.suit].push(t);
+  });
+  for (const suit of ["man","bam","circle"]) {
+    const tiles = (suitTiles[suit] || []).filter(t => !tripletIds.has(t.id) && !pairIds.has(t.id));
+    for (let i = 0; i < tiles.length; i++) {
+      if (sequenceIds.has(tiles[i].id)) continue;
+      const v = tiles[i].value;
+      const t2 = tiles.find(t => t.value === v + 1 && !sequenceIds.has(t.id) && t.id !== tiles[i].id);
+      if (!t2) continue;
+      const t3 = tiles.find(t => t.value === v + 2 && !sequenceIds.has(t.id) && t.id !== tiles[i].id && t.id !== t2.id);
+      if (t3) {
+        sequences.push([tiles[i], t2, t3]);
+        sequenceIds.add(tiles[i].id); sequenceIds.add(t2.id); sequenceIds.add(t3.id);
+      }
     }
   }
-  
-  // Find isolated tiles (no useful connections)
-  const usefulIds = new Set();
-  pairs.forEach(p => p.forEach(t => usefulIds.add(t.id)));
-  partials.forEach(p => p.tiles.forEach(t => usefulIds.add(t.id)));
-  const isolated = playable.filter(t => !usefulIds.has(t.id));
-  
-  // Safe discards: tiles that appear in discard pile (others don't need them)
+
+  // ── FIND PARTIAL SEQUENCES (2-tile runs needing 1 more) ─────────────────
+  const usedInComplete = new Set([...tripletIds, ...pairIds, ...sequenceIds]);
+  const partials = [];
+  const partialIds = new Set();
+  const freeSuitTiles = playable.filter(t => ["man","bam","circle"].includes(t.suit) && !usedInComplete.has(t.id));
+  for (let i = 0; i < freeSuitTiles.length; i++) {
+    if (partialIds.has(freeSuitTiles[i].id)) continue;
+    for (let j = i + 1; j < freeSuitTiles.length; j++) {
+      if (partialIds.has(freeSuitTiles[j].id)) continue;
+      const a = freeSuitTiles[i], b = freeSuitTiles[j];
+      if (a.suit !== b.suit) continue;
+      const diff = Math.abs(a.value - b.value);
+      if (diff === 1 || diff === 2) {
+        const needVals = diff === 1
+          ? [Math.min(a.value,b.value)-1, Math.max(a.value,b.value)+1].filter(v=>v>=1&&v<=9)
+          : [Math.min(a.value,b.value)+1];
+        partials.push({ tiles: [a,b], need: needVals.map(v=>({suit:a.suit,value:v})) });
+        partialIds.add(a.id); partialIds.add(b.id);
+        break;
+      }
+    }
+  }
+
+  // ── ISOLATED: nothing useful at all ─────────────────────────────────────
+  const allUsefulIds = new Set([...tripletIds, ...pairIds, ...sequenceIds, ...partialIds]);
+  const isolated = playable.filter(t => !allUsefulIds.has(t.id));
+
+  // ── SAFE DISCARDS: already seen in discard pile ──────────────────────────
   const discardedTileKeys = new Set(discardPile.map(t => `${t.suit}-${t.value}`));
   const safeDiscards = isolated.filter(t => discardedTileKeys.has(`${t.suit}-${t.value}`));
-  
-  // Best discard recommendation
+
+  // ── BEST DISCARD RECOMMENDATION ──────────────────────────────────────────
+  // Coaching fires whenever it's your turn (16 tiles before draw, 17 after draw)
   let bestDiscard = null;
   let reasoning = "";
-  
-  const handSize = playable.length;
-  
-  if (handSize === 17 || handSize === 16) {
-    // Need to discard to get to 16 or 13
-    // Priority: isolated tiles that are safe > isolated tiles > break weakest partial
+
+  const needToDiscard = playable.length === 17 || playable.length === 16;
+
+  if (needToDiscard) {
     if (safeDiscards.length > 0) {
       bestDiscard = safeDiscards[0];
-      reasoning = `${tileLabel(bestDiscard)} is isolated in your hand AND has already been discarded by others, making it very safe to throw.`;
+      reasoning = `${tileLabel(bestDiscard)} is isolated in your hand AND has already been discarded by others — very safe to throw.`;
     } else if (isolated.length > 0) {
-      // Pick honor tiles or edge tiles as least useful
-      const honors = isolated.filter(t => t.suit === "wind" || t.suit === "dragon");
-      const edges = isolated.filter(t => ["man","bam","circle"].includes(t.suit) && (t.value === 1 || t.value === 9));
-      if (honors.length > 0) {
-        bestDiscard = honors[0];
-        reasoning = `${tileLabel(bestDiscard)} is isolated — no connections to other tiles. Honor tiles are generally safe early since they can only form triplets, not sequences.`;
-      } else if (edges.length > 0) {
-        bestDiscard = edges[0];
-        reasoning = `${tileLabel(bestDiscard)} is an edge tile with limited sequence potential. It can only connect in one direction, making it weaker than mid-suit tiles.`;
+      const honorIsolated = isolated.filter(t => t.suit === "wind" || t.suit === "dragon");
+      const edgeIsolated = isolated.filter(t => ["man","bam","circle"].includes(t.suit) && (t.value === 1 || t.value === 9));
+      const midIsolated = isolated.filter(t => ["man","bam","circle"].includes(t.suit) && t.value >= 2 && t.value <= 8);
+      if (honorIsolated.length > 0) {
+        bestDiscard = honorIsolated[0];
+        reasoning = `${tileLabel(bestDiscard)} is isolated — no pair, triplet, or sequence connections. Honor tiles (winds/dragons) can only form triplets, not sequences, making them risky to hold without a pair.`;
+      } else if (edgeIsolated.length > 0) {
+        bestDiscard = edgeIsolated[0];
+        reasoning = `${tileLabel(bestDiscard)} is an isolated edge tile. Ones and nines connect on only one side, so they're harder to complete into sequences than middle tiles.`;
       } else {
-        bestDiscard = isolated[0];
-        reasoning = `${tileLabel(bestDiscard)} has no pairs or sequence connections in your current hand.`;
+        bestDiscard = midIsolated[0] || isolated[0];
+        reasoning = `${tileLabel(bestDiscard)} has no useful connections — no pair, no sequence potential. Shed it to improve your hand shape.`;
       }
-    } else if (pairs.length > 0) {
-      // All tiles have connections — evaluate which partial to sacrifice
-      reasoning = "Your hand has good connectivity. Consider which suit you want to commit to.";
-      bestDiscard = playable.find(t => t.suit === "wind" || t.suit === "dragon") || playable[0];
-      reasoning = `Consider breaking your weakest honor pair. ${tileLabel(bestDiscard)} may be dispensable if your suit tiles form a cleaner path to winning.`;
+    } else if (partials.length > 0) {
+      // All tiles have some connection. Find the weakest partial to break.
+      // Prefer breaking a partial whose needed tile is already gone from the discard pile
+      const deadPartial = partials.find(p => p.need.every(n => {
+        const key = `${n.suit}-${n.value}`;
+        return (discardPile.filter(d => `${d.suit}-${d.value}` === key).length >= 4);
+      }));
+      if (deadPartial) {
+        // Pick the more isolated of the two tiles (edge > honor > mid)
+        const candidates = deadPartial.tiles.filter(t => t.suit !== "man" && t.suit !== "bam" && t.suit !== "circle"
+          ? true : t.value === 1 || t.value === 9);
+        bestDiscard = candidates[0] || deadPartial.tiles[0];
+        reasoning = `${tileLabel(bestDiscard)}'s sequence completion tile has been fully discarded — that run is dead. Break this partial and keep stronger connections.`;
+      } else {
+        // Break a partial that's least connected to the rest of the hand
+        // Pick edge tile from a partial if possible
+        const edgeTileFromPartial = partials.flatMap(p => p.tiles).find(t => ["man","bam","circle"].includes(t.suit) && (t.value === 1 || t.value === 9));
+        if (edgeTileFromPartial) {
+          bestDiscard = edgeTileFromPartial;
+          reasoning = `${tileLabel(bestDiscard)} is part of a partial sequence but sits at the edge of a suit. It connects in only one direction, making it weaker than your other partials. Consider releasing it if you have stronger paths to winning.`;
+        } else {
+          bestDiscard = partials[partials.length - 1].tiles[0];
+          reasoning = `${tileLabel(bestDiscard)} is your weakest partial connection. Your hand has good shape overall — this is a judgment call about which suit to commit to.`;
+        }
+      }
+    } else if (pairs.length > 0 && triplets.length === 0) {
+      // Hand is dense with pairs and sequences — recommend weakest pair as possible discard only if overstuffed
+      const honorPair = pairs.find(p => p[0].suit === "wind" || p[0].suit === "dragon");
+      if (honorPair) {
+        bestDiscard = honorPair[0];
+        reasoning = `Your hand is well-connected. If you need to release a tile, consider breaking the ${tileLabel(honorPair[0])} pair — honor pairs are worth less than suit sequences toward a faster win, unless you're building toward All Triplets.`;
+      } else {
+        reasoning = "Your hand has excellent shape! Every tile is connected. Focus on which suit you're closest to completing and discard from your weakest run.";
+        bestDiscard = null; // No clear recommendation — hand is strong
+      }
+    } else {
+      reasoning = "Strong hand! Your tiles form solid sets. Draw and keep building — you're in good shape.";
+      bestDiscard = null;
     }
   }
-  
-  // Determine hand direction
-  const dominantSuit = Object.entries(suitCount).filter(([s]) => ["man","bam","circle"].includes(s)).sort((a,b)=>b[1]-a[1])[0];
-  let handType = "mixed";
-  if (dominantSuit && dominantSuit[1] >= playable.length * 0.7) handType = `${dominantSuit[0]}-heavy`;
-  
-  // Tiles away from winning (rough estimate)
-  const sets = Math.floor(revealedSets.length);
-  const needed = 4 - sets; // sets still needed from hand
-  
+
   return {
     pairs,
+    triplets,
     partials,
+    sequences,
     isolated,
     safeDiscards,
     bestDiscard,
     reasoning,
-    handType,
+    handType: "mixed",
     suitCount,
-    revealedCount: revealedSets.length
+    revealedCount: revealedSets.length,
+    needToDiscard,
   };
 }
 
@@ -562,19 +641,21 @@ function MahjongApp() {
     });
   }, []);
 
-  // Coaching update whenever hand changes
+  // Coaching update — runs whenever it becomes your turn OR your hand changes
+  // We use JSON.stringify length as a stable primitive trigger alongside currentPlayer
+  const handSize = game.hands[0].length;
+  const drawnTileId = game.drawnTile ? game.drawnTile.id : null;
   useEffect(() => {
     if (game.phase === "playing" && game.currentPlayer === 0) {
-      const hand = game.hands[0];
       const analysis = analyzeHand(
-        hand,
+        game.hands[0],
         game.discardPile,
         game.revealed[0],
         game.discardPiles
       );
       setCoaching(analysis);
     }
-  }, [game.hands[0], game.drawnTile, game.currentPlayer]);
+  }, [game.currentPlayer, handSize, drawnTileId, game.phase]);
 
   // AI turn handler
   useEffect(() => {
@@ -985,7 +1066,8 @@ function MahjongApp() {
     <div style={{ flex: 1, overflow: "auto", padding: 14, display: "flex", flexDirection: "column", gap: 12 }}>
       {coaching && isMyTurn && (
         <>
-          {coaching.bestDiscard && (
+          {/* Recommended discard — only shown when there's a clear recommendation */}
+          {coaching.bestDiscard ? (
             <div style={{ background: "rgba(212,168,67,0.08)", border: "1px solid rgba(212,168,67,0.25)", borderRadius: 6, padding: "10px 12px" }}>
               <div style={{ fontSize: 11, color: COLORS.gold, fontFamily: "'Cinzel', serif", marginBottom: 6, letterSpacing: 0.5 }}>RECOMMENDED DISCARD</div>
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
@@ -994,16 +1076,60 @@ function MahjongApp() {
               </div>
               <div style={{ fontSize: 12, color: COLORS.textMuted, lineHeight: 1.6 }}>{coaching.reasoning}</div>
             </div>
-          )}
+          ) : coaching.reasoning ? (
+            <div style={{ background: "rgba(34,197,94,0.07)", border: "1px solid rgba(34,197,94,0.25)", borderRadius: 6, padding: "10px 12px" }}>
+              <div style={{ fontSize: 11, color: "#22c55e", fontFamily: "'Cinzel', serif", marginBottom: 6, letterSpacing: 0.5 }}>HAND STATUS</div>
+              <div style={{ fontSize: 12, color: COLORS.textMuted, lineHeight: 1.6 }}>{coaching.reasoning}</div>
+            </div>
+          ) : null}
+
+          {/* Hand structure */}
           <div style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${COLORS.border}`, borderRadius: 6, padding: "10px 12px" }}>
             <div style={{ fontSize: 11, color: COLORS.gold, fontFamily: "'Cinzel', serif", marginBottom: 8, letterSpacing: 0.5 }}>HAND STRUCTURE</div>
             <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-              {coaching.pairs.length > 0 && <div style={{ fontSize: 12, color: COLORS.text }}><span style={{ color: "#60a5fa" }}>Pairs ({coaching.pairs.length}):</span> <span style={{ color: COLORS.textMuted }}>{coaching.pairs.map(p => tileLabel(p[0])).join(", ")}</span></div>}
-              {coaching.partials.length > 0 && <div style={{ fontSize: 12, color: COLORS.text }}><span style={{ color: "#4ade80" }}>Partials ({coaching.partials.length}):</span> <span style={{ color: COLORS.textMuted }}>{coaching.partials.slice(0,3).map(p => `${tileLabel(p.tiles[0])}-${tileLabel(p.tiles[1])}`).join(", ")}</span></div>}
-              {coaching.isolated.length > 0 && <div style={{ fontSize: 12, color: COLORS.text }}><span style={{ color: "#f87171" }}>Isolated ({coaching.isolated.length}):</span> <span style={{ color: COLORS.textMuted }}>{coaching.isolated.map(t => tileLabel(t)).join(", ")}</span></div>}
-              {coaching.safeDiscards.length > 0 && <div style={{ fontSize: 12, color: COLORS.text }}><span style={{ color: "#22c55e" }}>Safe to discard:</span> <span style={{ color: COLORS.textMuted }}>{coaching.safeDiscards.map(t => tileLabel(t)).join(", ")}</span></div>}
+              {coaching.triplets.length > 0 && (
+                <div style={{ fontSize: 12, color: COLORS.text }}>
+                  <span style={{ color: "#f59e0b" }}>✓ Triplets ({coaching.triplets.length}):</span>{" "}
+                  <span style={{ color: COLORS.textMuted }}>{coaching.triplets.map(t => tileLabel(t[0])).join(", ")}</span>
+                </div>
+              )}
+              {coaching.sequences.length > 0 && (
+                <div style={{ fontSize: 12, color: COLORS.text }}>
+                  <span style={{ color: "#22c55e" }}>✓ Sequences ({coaching.sequences.length}):</span>{" "}
+                  <span style={{ color: COLORS.textMuted }}>{coaching.sequences.map(s => s.map(t=>tileLabel(t)).join("-")).join(", ")}</span>
+                </div>
+              )}
+              {coaching.pairs.length > 0 && (
+                <div style={{ fontSize: 12, color: COLORS.text }}>
+                  <span style={{ color: "#60a5fa" }}>Pairs ({coaching.pairs.length}):</span>{" "}
+                  <span style={{ color: COLORS.textMuted }}>{coaching.pairs.map(p => tileLabel(p[0])).join(", ")}</span>
+                </div>
+              )}
+              {coaching.partials.length > 0 && (
+                <div style={{ fontSize: 12, color: COLORS.text }}>
+                  <span style={{ color: "#a78bfa" }}>Partials ({coaching.partials.length}):</span>{" "}
+                  <span style={{ color: COLORS.textMuted }}>{coaching.partials.slice(0,4).map(p => `${tileLabel(p.tiles[0])}-${tileLabel(p.tiles[1])}`).join(", ")}</span>
+                </div>
+              )}
+              {coaching.isolated.length > 0 && (
+                <div style={{ fontSize: 12, color: COLORS.text }}>
+                  <span style={{ color: "#f87171" }}>Isolated ({coaching.isolated.length}):</span>{" "}
+                  <span style={{ color: COLORS.textMuted }}>{coaching.isolated.map(t => tileLabel(t)).join(", ")}</span>
+                </div>
+              )}
+              {coaching.safeDiscards.length > 0 && (
+                <div style={{ fontSize: 12, color: COLORS.text }}>
+                  <span style={{ color: "#22c55e" }}>Safe to discard:</span>{" "}
+                  <span style={{ color: COLORS.textMuted }}>{coaching.safeDiscards.map(t => tileLabel(t)).join(", ")} (already discarded)</span>
+                </div>
+              )}
+              {coaching.triplets.length === 0 && coaching.sequences.length === 0 && coaching.pairs.length === 0 && coaching.partials.length === 0 && coaching.isolated.length === 0 && (
+                <div style={{ fontSize: 12, color: COLORS.textMuted }}>Draw a tile to see analysis.</div>
+              )}
             </div>
           </div>
+
+          {/* Suit distribution */}
           <div style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${COLORS.border}`, borderRadius: 6, padding: "10px 12px" }}>
             <div style={{ fontSize: 11, color: COLORS.gold, fontFamily: "'Cinzel', serif", marginBottom: 8, letterSpacing: 0.5 }}>SUIT DISTRIBUTION</div>
             {Object.entries(coaching.suitCount).filter(([,v])=>v>0).map(([suit, count]) => (
@@ -1016,20 +1142,30 @@ function MahjongApp() {
               </div>
             ))}
           </div>
+
+          {/* Strategic tips */}
           <div style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${COLORS.border}`, borderRadius: 6, padding: "10px 12px" }}>
             <div style={{ fontSize: 11, color: COLORS.gold, fontFamily: "'Cinzel', serif", marginBottom: 8, letterSpacing: 0.5 }}>STRATEGIC TIPS</div>
             <div style={{ fontSize: 12, color: COLORS.textMuted, lineHeight: 1.8 }}>
-              {coaching.pairs.length >= 6 && playerHand.filter(t=>!t.isFlower).length >= 14
-                ? "🎯 Many pairs — consider All Pairs hand!"
-                : coaching.suitCount.man >= 7 || coaching.suitCount.bam >= 7 || coaching.suitCount.circle >= 7
-                  ? "🎯 Heavily one suit — consider a pure suit hand!"
-                  : coaching.partials.length >= 3
-                    ? "🎯 Good sequence potential. Stay patient."
-                    : coaching.isolated.length > 3
-                      ? "⚠️ Many isolated tiles. Dump honors and edges first."
-                      : "✅ Balanced hand. Build sequences and look for fast wins."}
+              {coaching.triplets.length + coaching.sequences.length >= 3
+                ? "🏆 You're very close to winning! Focus on completing your last set and finding your pair."
+                : coaching.pairs.length >= 6
+                  ? "🎯 Many pairs — consider going for All Pairs (七對) hand!"
+                  : coaching.suitCount.man >= 7 || coaching.suitCount.bam >= 7 || coaching.suitCount.circle >= 7
+                    ? "🎯 Heavily one suit — consider a pure suit hand for bonus points!"
+                    : coaching.triplets.length >= 2
+                      ? "🎯 Multiple triplets — consider building toward All Triplets (對對胡)!"
+                      : coaching.partials.length >= 3
+                        ? "🎯 Good sequence potential. Stay patient and draw into your runs."
+                        : coaching.isolated.length > 3
+                          ? "⚠️ Many isolated tiles. Dump honors and edge tiles first."
+                          : "✅ Balanced hand. Build sequences and look for fast wins."}
             </div>
-            {revealed[0].length > 0 && <div style={{ fontSize: 12, color: COLORS.textMuted, marginTop: 6, lineHeight: 1.6 }}>⚡ Open sets visible — others may avoid discarding your suit.</div>}
+            {revealed[0].length > 0 && (
+              <div style={{ fontSize: 12, color: COLORS.textMuted, marginTop: 6, lineHeight: 1.6 }}>
+                ⚡ You have open sets — others can read your suits. They may hold back tiles that help you.
+              </div>
+            )}
           </div>
         </>
       )}
@@ -1055,6 +1191,12 @@ function MahjongApp() {
     </div>
   );
 
+  // ── TILE COUNT: concealed + revealed sets (Kong counts as 3, not 4) ─────
+  // Each revealed set counts as 3 tiles toward the hand total regardless of type
+  const revealedSetTileCount = revealed[0].reduce((sum) => sum + 3, 0);
+  const concealedTileCount = playerHand.filter(t => !t.isFlower).length;
+  const totalHandCount = concealedTileCount + revealedSetTileCount;
+
   // ── GAME TABLE (shared) ──────────────────────────────────────────────────
   const GameTable = ({ compact }) => (
     <div style={{
@@ -1071,10 +1213,10 @@ function MahjongApp() {
       {/* Opponent at top (West) — strictly one row, no wrapping */}
       <div style={{ flexShrink: 0, display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
         <div style={{ fontSize: 10, color: currentPlayer === 2 ? COLORS.goldLight : COLORS.textMuted, fontFamily: "'Cinzel', serif", letterSpacing: 1 }}>
-          {currentPlayer === 2 && <span className="pulsing">▼ </span>}WEST · {hands[2].length}
+          {currentPlayer === 2 && <span className="pulsing">▼ </span>}WEST · {hands[2].length + revealed[2].reduce((s,r)=>s+r.tiles.length,0)}
         </div>
-        {/* Single scrollable row — never wraps */}
-        <div style={{ display: "flex", gap: 2, overflowX: "auto", maxWidth: "100%", paddingBottom: 2 }}>
+        {/* Single scrollable row — flexShrink:0, never wraps */}
+        <div style={{ display: "flex", gap: 2, overflowX: "auto", width: "100%", paddingBottom: 2, flexShrink: 0 }}>
           {revealed[2].map((set, si) => (
             <div key={si} style={{ display: "flex", gap: 1, flexShrink: 0, background: "rgba(212,168,67,0.1)", padding: "2px 3px", borderRadius: 3, border: "1px solid rgba(212,168,67,0.2)" }}>
               {set.tiles.map((t, ti) => <TileComponent key={ti} tile={t} small />)}
@@ -1088,10 +1230,10 @@ function MahjongApp() {
             </div>
           )}
         </div>
-        {/* Opponent discards — single scrollable row */}
+        {/* Opponent discards — strictly limited, single scrollable row, no wrap */}
         {discardPiles[2].length > 0 && (
-          <div style={{ display: "flex", gap: 2, overflowX: "auto", maxWidth: "100%", paddingBottom: 2 }}>
-            {discardPiles[2].slice(-8).map((t, i) => <TileComponent key={i} tile={t} small />)}
+          <div style={{ display: "flex", gap: 2, overflowX: "auto", width: "100%", paddingBottom: 2, flexShrink: 0 }}>
+            {discardPiles[2].slice(-(compact ? 6 : 8)).map((t, i) => <TileComponent key={i} tile={t} small />)}
           </div>
         )}
       </div>
@@ -1158,11 +1300,11 @@ function MahjongApp() {
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
           <div style={{ fontSize: 11, color: currentPlayer === 0 ? COLORS.goldLight : COLORS.textMuted, fontFamily: "'Cinzel', serif", letterSpacing: 0.5 }}>
             {currentPlayer === 0 && <span className="pulsing">▲ YOUR TURN · </span>}
-            YOUR HAND · {playerHand.filter(t=>!t.isFlower).length} tiles
+            YOUR HAND · {totalHandCount} tiles
           </div>
           <div style={{ display: "flex", gap: 6 }}>
             {flowers[0].length > 0 && <div style={{ fontSize: 10, color: "#22c55e" }}>🌸×{flowers[0].length}</div>}
-            {revealed[0].length > 0 && <div style={{ fontSize: 10, color: COLORS.textMuted }}>{revealed[0].length} set(s)</div>}
+            {revealed[0].length > 0 && <div style={{ fontSize: 10, color: COLORS.textMuted }}>{revealed[0].length} set(s) exposed</div>}
           </div>
         </div>
 
@@ -1350,7 +1492,16 @@ function MahjongApp() {
             ? <GameTable compact={true} />
             : (
               <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column", background: COLORS.panel }}>
-                <div style={{ padding: "10px 14px", borderBottom: `1px solid ${COLORS.border}`, fontFamily: "'Cinzel', serif", fontSize: 12, color: COLORS.gold, letterSpacing: 1 }}>🎓 COACH ANALYSIS</div>
+                <div style={{ padding: "10px 14px", borderBottom: `1px solid ${COLORS.border}`, display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0 }}>
+                  <div style={{ fontFamily: "'Cinzel', serif", fontSize: 12, color: COLORS.gold, letterSpacing: 1 }}>🎓 COACH ANALYSIS</div>
+                  <button
+                    className="btn-outline"
+                    onClick={() => setMobileTab("game")}
+                    style={{ fontSize: 11, padding: "4px 10px" }}
+                  >
+                    ← Back to Game
+                  </button>
+                </div>
                 <CoachPanel />
               </div>
             )
