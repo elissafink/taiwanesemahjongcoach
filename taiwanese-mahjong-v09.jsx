@@ -1,27 +1,4 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <title>Taiwanese Mahjong Coach</title>
-  <meta name="description" content="Taiwanese Mahjong with AI coaching — learn strategy as you play" />
-  <meta name="theme-color" content="#0a1628" />
-  <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🀄</text></svg>" />
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
-  <style>
-    html, body, #root { margin: 0; padding: 0; min-height: 100%; width: 100%; background: #0a1628; }
-    * { box-sizing: border-box; }
-  </style>
-</head>
-<body>
-  <div id="root"></div>
-  <script type="text/babel">
-    const { useState, useEffect, useCallback, useRef } = React;
-
+import { useState, useEffect, useCallback, useRef } from "react";
 
 // ============================================================
 // TILE DEFINITIONS
@@ -684,76 +661,19 @@ function findChowOptions(hand, discardedTile) {
 // ============================================================
 // MAIN APP
 // ============================================================
-function MahjongApp() {
+export default function MahjongApp() {
   const [game, setGame] = useState(() => initGame());
   const [selectedTile, setSelectedTile] = useState(null);
   const [coaching, setCoaching] = useState(null);
   const [showRules, setShowRules] = useState(false);
   const [mobileTab, setMobileTab] = useState("game");
+  // Undo history: stack of up to 8 snapshots, each is { game, selectedTile }
   const [undoStack, setUndoStack] = useState([]);
+  // Chow picker: when player clicks CHOW we show this instead of auto-selecting
+  // { discardedTile, fromPlayer, chowOptions: [[t,t,t], ...], canWin: bool }
   const [chowPicker, setChowPicker] = useState(null);
-  const [chatMessages, setChatMessages] = useState([]);
-  const [chatInput, setChatInput] = useState("");
-  const [chatLoading, setChatLoading] = useState(false);
-  const chatEndRef = useRef(null);
 
   const aiTimerRef = useRef(null);
-
-  // ── CHAT: send a question to AI with full game context ──────────────────
-  const sendChatMessage = useCallback(async (question) => {
-    if (!question.trim()) return;
-    const userMsg = { role: "user", text: question.trim() };
-    setChatMessages(prev => [...prev, userMsg]);
-    setChatInput("");
-    setChatLoading(true);
-
-    // Build a rich game context string for the AI
-    const { hands, revealed, discardPile, discardPiles, playerWinds, flowers } = game;
-    const myHand = hands[0].filter(t => !t.isFlower).map(t => tileLabel(t)).join(", ");
-    const myRevealed = revealed[0].map(s => `${s.type.toUpperCase()}(${s.tiles.map(t=>tileLabel(t)).join("-")})`).join(", ") || "none";
-    const myFlowers = flowers[0].map(t => tileLabel(t)).join(", ") || "none";
-    const centerDiscards = discardPile.slice(-30).map(t => tileLabel(t)).join(", ") || "none";
-    const opponentInfo = [1,2,3].map(p => {
-      const exposed = revealed[p].map(s => `${s.type.toUpperCase()}(${s.tiles.map(t=>tileLabel(t)).join("-")})`).join(", ") || "none";
-      const discards = discardPiles[p].map(t => tileLabel(t)).join(", ") || "none";
-      return `  ${playerWinds[p]}: exposed sets: ${exposed} | discards: ${discards}`;
-    }).join("\n");
-
-    const systemPrompt = `You are an expert Taiwanese Mahjong coach. Answer the player's question concisely and clearly. Always base your advice on the actual tile information provided.
-
-CURRENT GAME STATE:
-- My concealed hand: ${myHand}
-- My exposed sets: ${myRevealed}
-- My flowers: ${myFlowers}
-- Recent discards (center pile): ${centerDiscards}
-- Opponents:
-${opponentInfo}
-
-Tile notation: number + suit abbreviation (e.g. "7MAN" = 7 of Characters, "3BAM" = 3 of Bamboo, "5CIR" = 5 of Circles, "E" = East wind, "中" = Red Dragon, etc.)
-Rules: Need 4 sets (sequences of 3 consecutive same-suit OR triplets of 3 identical) + 1 pair to win. Special hand: 7 pairs. Chow = claim a sequence from any player. Pong = claim a triplet from any player.
-
-Give specific, actionable advice. Keep responses under 150 words.`;
-
-    try {
-      const resp = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 300,
-          system: systemPrompt,
-          messages: [{ role: "user", content: question.trim() }],
-        }),
-      });
-      const data = await resp.json();
-      const reply = data.content?.[0]?.text || "Sorry, I couldn't get a response. Try again.";
-      setChatMessages(prev => [...prev, { role: "coach", text: reply }]);
-    } catch (e) {
-      setChatMessages(prev => [...prev, { role: "coach", text: "Network error — check your connection and try again." }]);
-    } finally {
-      setChatLoading(false);
-    }
-  }, [game]);
 
   // Helper: push current state onto undo stack (max 8)
   const pushUndo = useCallback((gameSnapshot, selSnapshot) => {
@@ -772,8 +692,7 @@ Give specific, actionable advice. Keep responses under 150 words.`;
     });
   }, []);
 
-  // Coaching update — fires after draw (drawnTileId non-null) to give discard advice.
-  // Does NOT clear when drawnTileId becomes null — keeps last advice visible until next draw.
+  // Coaching update — only fires AFTER you've drawn a tile (drawnTileId is non-null)
   const handSize = game.hands[0].length;
   const drawnTileId = game.drawnTile ? game.drawnTile.id : null;
   useEffect(() => {
@@ -785,9 +704,10 @@ Give specific, actionable advice. Keep responses under 150 words.`;
         game.discardPiles
       );
       setCoaching(analysis);
+    } else if (drawnTileId === null) {
+      // Clear discard advice when no tile drawn (waiting state)
+      setCoaching(null);
     }
-    // Deliberately NOT clearing coaching when drawnTileId is null —
-    // we want the last advice to remain visible between turns.
   }, [game.currentPlayer, handSize, drawnTileId, game.phase]);
 
   // Claim advice — computed inline when claimOptions exist
@@ -846,11 +766,6 @@ Give specific, actionable advice. Keep responses under 150 words.`;
 
     return null;
   })();
-
-  // Scroll chat to bottom when new messages arrive
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [chatMessages]);
 
   // AI turn handler
   useEffect(() => {
@@ -1407,74 +1322,6 @@ Give specific, actionable advice. Keep responses under 150 words.`;
           ))}
         </div>
       </div>
-
-      {/* ── ASK THE COACH chat box ── */}
-      <div style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${COLORS.border}`, borderRadius: 6, overflow: "hidden" }}>
-        <div style={{ padding: "8px 12px", borderBottom: `1px solid ${COLORS.border}`, fontFamily: "'Cinzel', serif", fontSize: 11, color: COLORS.gold, letterSpacing: 0.5 }}>
-          💬 ASK THE COACH
-        </div>
-        {/* Message history */}
-        {chatMessages.length > 0 && (
-          <div style={{ maxHeight: 200, overflowY: "auto", padding: "8px 10px", display: "flex", flexDirection: "column", gap: 8 }}>
-            {chatMessages.map((msg, i) => (
-              <div key={i} style={{
-                fontSize: 11,
-                lineHeight: 1.6,
-                padding: "6px 9px",
-                borderRadius: 6,
-                background: msg.role === "user" ? "rgba(212,168,67,0.1)" : "rgba(30,58,138,0.25)",
-                border: `1px solid ${msg.role === "user" ? "rgba(212,168,67,0.2)" : "rgba(59,110,160,0.3)"}`,
-                color: msg.role === "user" ? COLORS.gold : COLORS.text,
-                alignSelf: msg.role === "user" ? "flex-end" : "flex-start",
-                maxWidth: "92%",
-              }}>
-                {msg.role === "coach" && <span style={{ fontSize: 10, color: COLORS.textMuted, display: "block", marginBottom: 2 }}>🎓 Coach</span>}
-                {msg.text}
-              </div>
-            ))}
-            {chatLoading && (
-              <div style={{ fontSize: 11, color: COLORS.textMuted, padding: "6px 9px", fontStyle: "italic" }} className="pulsing">
-                Coach is thinking…
-              </div>
-            )}
-            <div ref={chatEndRef} />
-          </div>
-        )}
-        {/* Input area */}
-        <div style={{ padding: "8px 10px", display: "flex", gap: 6, borderTop: chatMessages.length > 0 ? `1px solid ${COLORS.border}` : "none" }}>
-          <input
-            value={chatInput}
-            onChange={e => setChatInput(e.target.value)}
-            onKeyDown={e => { if (e.key === "Enter" && !chatLoading) sendChatMessage(chatInput); }}
-            placeholder="Ask about your hand…"
-            disabled={chatLoading}
-            style={{
-              flex: 1,
-              background: "rgba(255,255,255,0.05)",
-              border: `1px solid ${COLORS.border}`,
-              borderRadius: 4,
-              color: COLORS.text,
-              fontSize: 11,
-              padding: "6px 8px",
-              outline: "none",
-              fontFamily: "Georgia, serif",
-            }}
-          />
-          <button
-            className="btn-outline"
-            onClick={() => sendChatMessage(chatInput)}
-            disabled={chatLoading || !chatInput.trim()}
-            style={{ fontSize: 11, padding: "5px 10px", opacity: chatLoading || !chatInput.trim() ? 0.5 : 1 }}
-          >
-            Ask
-          </button>
-        </div>
-        {chatMessages.length === 0 && (
-          <div style={{ padding: "4px 10px 8px", fontSize: 10, color: COLORS.textMuted, lineHeight: 1.5 }}>
-            Try: "Should I discard the 8 Man or 5 Cir?" or "Am I close to winning?"
-          </div>
-        )}
-      </div>
     </div>
   );
 
@@ -1541,7 +1388,7 @@ Give specific, actionable advice. Keep responses under 150 words.`;
           </div>
         </div>
 
-        {/* Center discard — natural height, wrapping tiles, no wasted space */}
+        {/* Center discard — fixed compact height, scrollable internally */}
         <div style={{
           flex: 1,
           background: `radial-gradient(ellipse, rgba(15,48,32,0.8), rgba(10,22,40,0.6))`,
@@ -1552,17 +1399,18 @@ Give specific, actionable advice. Keep responses under 150 words.`;
           flexDirection: "column",
           gap: 4,
           minWidth: 0,
+          height: compact ? 120 : 150,
         }}>
-          <div style={{ fontSize: 10, color: COLORS.textMuted, fontFamily: "'Cinzel', serif", letterSpacing: 1, textAlign: "center" }}>DISCARD PILE</div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 2, alignContent: "flex-start" }}>
-            {discardPile.slice(-(compact ? 30 : 48)).map((t, i) => (
+          <div style={{ fontSize: 10, color: COLORS.textMuted, fontFamily: "'Cinzel', serif", letterSpacing: 1, textAlign: "center", flexShrink: 0 }}>DISCARD PILE</div>
+          <div style={{ flex: 1, display: "flex", flexWrap: "wrap", gap: 2, alignContent: "flex-start", overflow: "auto" }}>
+            {discardPile.slice(-(compact ? 16 : 24)).map((t, i) => (
               <TileComponent key={i} tile={t} small dimmed={lastDiscard && t.id !== lastDiscard.id && i < discardPile.length - 1} />
             ))}
           </div>
-          <div style={{ background: "rgba(0,0,0,0.3)", borderRadius: 4, padding: "2px 5px", border: `1px solid ${COLORS.border}`, marginTop: 2 }}>
-            <div style={{ fontSize: 9, color: COLORS.text, lineHeight: 1.4 }}>
-              {gameLog[gameLog.length - 1] || ""}
-            </div>
+          <div style={{ flexShrink: 0, background: "rgba(0,0,0,0.3)", borderRadius: 4, padding: "3px 5px", border: `1px solid ${COLORS.border}` }}>
+            {gameLog.slice(-2).map((log, i) => (
+              <div key={i} style={{ fontSize: 9, color: i === gameLog.slice(-2).length - 1 ? COLORS.text : COLORS.textMuted, lineHeight: 1.4 }}>{log}</div>
+            ))}
           </div>
         </div>
 
@@ -1808,10 +1656,3 @@ Give specific, actionable advice. Keep responses under 150 words.`;
     </div>
   );
 }
-
-
-    const root = ReactDOM.createRoot(document.getElementById('root'));
-    root.render(<MahjongApp />);
-  </script>
-</body>
-</html>
