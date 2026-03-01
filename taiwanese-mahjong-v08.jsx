@@ -1,27 +1,4 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <title>Taiwanese Mahjong Coach</title>
-  <meta name="description" content="Taiwanese Mahjong with AI coaching — learn strategy as you play" />
-  <meta name="theme-color" content="#0a1628" />
-  <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🀄</text></svg>" />
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
-  <style>
-    html, body, #root { margin: 0; padding: 0; min-height: 100%; width: 100%; background: #0a1628; }
-    * { box-sizing: border-box; }
-  </style>
-</head>
-<body>
-  <div id="root"></div>
-  <script type="text/babel">
-    const { useState, useEffect, useCallback, useRef } = React;
-
+import { useState, useEffect, useCallback, useRef } from "react";
 
 // ============================================================
 // TILE DEFINITIONS
@@ -610,7 +587,7 @@ function findChowOptions(hand, discardedTile) {
 // ============================================================
 // MAIN APP
 // ============================================================
-function MahjongApp() {
+export default function MahjongApp() {
   const [game, setGame] = useState(() => initGame());
   const [selectedTile, setSelectedTile] = useState(null);
   const [coaching, setCoaching] = useState(null);
@@ -1605,10 +1582,3 @@ function MahjongApp() {
     </div>
   );
 }
-
-
-    const root = ReactDOM.createRoot(document.getElementById('root'));
-    root.render(<MahjongApp />);
-  </script>
-</body>
-</html>
