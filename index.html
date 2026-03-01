@@ -495,6 +495,40 @@ function TileComponent({ tile, selected, onClick, small, faceDown, dimmed }) {
 }
 
 // ============================================================
+// CHOW PICKER HELPERS
+// ============================================================
+// Find all valid chow combinations the player can make with a given discarded tile
+function findChowOptions(hand, discardedTile) {
+  if (!["man","bam","circle"].includes(discardedTile.suit)) return [];
+  const playable = hand.filter(t => !t.isFlower && t.suit === discardedTile.suit);
+  const v = discardedTile.value;
+  const options = [];
+
+  // Pattern 1: discard is the HIGH tile  → need v-2, v-1
+  const lo2 = playable.find(t => t.value === v - 2);
+  const lo1 = playable.find(t => t.value === v - 1);
+  if (lo2 && lo1) options.push([lo2, lo1, discardedTile]);
+
+  // Pattern 2: discard is the MIDDLE tile → need v-1, v+1
+  const mid_lo = playable.find(t => t.value === v - 1);
+  const mid_hi = playable.find(t => t.value === v + 1);
+  if (mid_lo && mid_hi) options.push([mid_lo, discardedTile, mid_hi]);
+
+  // Pattern 3: discard is the LOW tile   → need v+1, v+2
+  const hi1 = playable.find(t => t.value === v + 1);
+  const hi2 = playable.find(t => t.value === v + 2);
+  if (hi1 && hi2) options.push([discardedTile, hi1, hi2]);
+
+  // Deduplicate by tile-id sets
+  const seen = new Set();
+  return options.filter(opt => {
+    const key = opt.map(t=>t.id).sort().join(',');
+    if (seen.has(key)) return false;
+    seen.add(key); return true;
+  });
+}
+
+// ============================================================
 // MAIN APP
 // ============================================================
 function MahjongApp() {
@@ -503,8 +537,31 @@ function MahjongApp() {
   const [coaching, setCoaching] = useState(null);
   const [showRules, setShowRules] = useState(false);
   const [mobileTab, setMobileTab] = useState("game");
+  // Undo history: stack of up to 8 snapshots, each is { game, selectedTile }
+  const [undoStack, setUndoStack] = useState([]);
+  // Chow picker: when player clicks CHOW we show this instead of auto-selecting
+  // { discardedTile, fromPlayer, chowOptions: [[t,t,t], ...], canWin: bool }
+  const [chowPicker, setChowPicker] = useState(null);
+
   const aiTimerRef = useRef(null);
-  
+
+  // Helper: push current state onto undo stack (max 8)
+  const pushUndo = useCallback((gameSnapshot, selSnapshot) => {
+    setUndoStack(prev => [...prev.slice(-7), { game: gameSnapshot, selectedTile: selSnapshot }]);
+  }, []);
+
+  // Undo handler
+  const handleUndo = useCallback(() => {
+    setUndoStack(prev => {
+      if (prev.length === 0) return prev;
+      const snapshot = prev[prev.length - 1];
+      setGame(snapshot.game);
+      setSelectedTile(snapshot.selectedTile);
+      setChowPicker(null);
+      return prev.slice(0, -1);
+    });
+  }, []);
+
   // Coaching update whenever hand changes
   useEffect(() => {
     if (game.phase === "playing" && game.currentPlayer === 0) {
@@ -518,115 +575,106 @@ function MahjongApp() {
       setCoaching(analysis);
     }
   }, [game.hands[0], game.drawnTile, game.currentPlayer]);
-  
+
   // AI turn handler
   useEffect(() => {
     if (game.phase !== "playing") return;
     if (game.currentPlayer === 0) return;
     if (game.claimOptions) return;
     if (game.winner) return;
-    
+
     aiTimerRef.current = setTimeout(() => {
       handleAITurn();
     }, 1200);
-    
+
     return () => clearTimeout(aiTimerRef.current);
   }, [game.currentPlayer, game.phase, game.claimOptions]);
-  
+
   const handleAITurn = useCallback(() => {
     setGame(prev => {
       if (prev.currentPlayer === 0) return prev;
       const p = prev.currentPlayer;
       const newGame = { ...prev, hands: prev.hands.map(h=>[...h]), discardPiles: prev.discardPiles.map(d=>[...d]), revealed: prev.revealed.map(r=>[...r]) };
-      
-      // Draw tile
+
       if (newGame.deck.length === 0) {
         return { ...newGame, phase: "draw", gameLog: [...newGame.gameLog, "The wall is exhausted! Draw game."] };
       }
-      
+
       let drawn = newGame.deck.shift();
       while (drawn.isFlower && newGame.deck.length > 0) {
         newGame.flowers[p].push(drawn);
         drawn = newGame.deck.shift();
       }
-      
+
       if (!drawn.isFlower) {
         newGame.hands[p].push(drawn);
-        
-        // Check AI win on self-draw
+
         const winCheck = canWin(newGame.hands[p].filter(t=>!t.isFlower), newGame.revealed[p]);
         if (winCheck.win) {
           return { ...newGame, winner: p, winInfo: winCheck, phase: "won", gameLog: [...newGame.gameLog, `Player ${p+1} (${newGame.playerWinds[p]}) wins by self-draw! 🎉`] };
         }
-        
-        // AI discards
+
         const discard = aiDiscard(newGame.hands[p]);
         newGame.hands[p] = newGame.hands[p].filter(t => t.id !== discard.id);
         newGame.discardPiles[p].push(discard);
         newGame.discardPile = [...newGame.discardPile, discard];
         newGame.lastDiscard = discard;
         newGame.lastDiscardPlayer = p;
-        
+
         const log = `${newGame.playerWinds[p]} discards ${tileLabel(discard)}`;
         newGame.gameLog = [...newGame.gameLog.slice(-20), log];
-        
+
         // Check if player 0 can claim
-        const claim = checkPlayerClaim(newGame.hands[0], discard);
-        
-        // Check if player can win with this discard
+        const playerCanChow = findChowOptions(newGame.hands[0], discard).length > 0;
+        const playerCanPong = newGame.hands[0].filter(t => isPair(t, discard)).length >= 2;
         const playerWin = canWinWithTile(newGame.hands[0], discard);
-        if (playerWin.win) {
-          if (claim) claim.canWin = true;
-          else {
-            // offer win only
-            newGame.claimOptions = { discardedTile: discard, fromPlayer: p, options: [{ type: "win", tiles: [discard] }] };
-            newGame.currentPlayer = 0;
-            return newGame;
-          }
-        }
-        
-        if (claim) {
-          newGame.claimOptions = { discardedTile: discard, fromPlayer: p, options: [claim, ...(playerWin.win ? [{ type: "win", tiles: [discard] }] : [])] };
+
+        const claimOpts = [];
+        if (playerCanPong) claimOpts.push({ type: "pong" });
+        if (playerCanChow) claimOpts.push({ type: "chow" });
+        if (playerWin.win) claimOpts.push({ type: "win", tiles: [discard] });
+
+        if (claimOpts.length > 0) {
+          newGame.claimOptions = { discardedTile: discard, fromPlayer: p, options: claimOpts };
           newGame.currentPlayer = 0;
         } else {
-          // Move to next player (could be player 0)
           newGame.currentPlayer = (p + 1) % 4;
         }
       }
-      
+
       return newGame;
     });
   }, []);
-  
+
   function checkPlayerClaim(hand, tile) {
     return aiCanClaim(hand, tile);
   }
-  
+
   // Player draws a tile
   const handleDraw = useCallback(() => {
     setGame(prev => {
       if (prev.currentPlayer !== 0) return prev;
       if (prev.drawnTile) return prev;
       if (prev.deck.length === 0) return { ...prev, phase: "draw" };
-      
+
+      // Snapshot for undo BEFORE the draw
+      pushUndo(prev, selectedTile);
+
       let drawn = prev.deck[0];
       const newDeck = prev.deck.slice(1);
       let flowers = [...prev.flowers[0]];
-      let extraDraws = [];
-      
+
       while (drawn && drawn.isFlower) {
         flowers.push(drawn);
         drawn = newDeck.shift();
       }
-      
+
       const newHand = drawn ? [...prev.hands[0], drawn] : [...prev.hands[0]];
-      
       const winCheck = drawn ? canWinWithTile(prev.hands[0], drawn) : { win: false };
-      
-      const log = drawn 
+      const log = drawn
         ? `You drew ${tileLabel(drawn)}${winCheck.win ? " — You can win! 🎉" : ""}`
         : "No tiles left!";
-      
+
       return {
         ...prev,
         deck: newDeck,
@@ -634,37 +682,28 @@ function MahjongApp() {
         hands: prev.hands.map((h, i) => i === 0 ? newHand : h),
         flowers: prev.flowers.map((f, i) => i === 0 ? flowers : f),
         gameLog: [...prev.gameLog.slice(-20), log],
-        ...(winCheck.win ? {} : {}),
       };
     });
     setSelectedTile(null);
-  }, []);
-  
+  }, [pushUndo, selectedTile]);
+
   // Player discards a tile
   const handleDiscard = useCallback((tile) => {
     setGame(prev => {
       if (prev.currentPlayer !== 0) return prev;
-      if (!prev.drawnTile && prev.hands[0].length <= 16) {
-        // First discard (dealer starts with 16, or player needs to discard before drawing)
-        // Allow discard
-      }
-      
+
+      // Snapshot for undo BEFORE the discard
+      pushUndo(prev, selectedTile);
+
       const newHand = prev.hands[0].filter(t => t.id !== tile.id);
       const newDiscards = [...prev.discardPiles[0], tile];
       const newDiscardPile = [...prev.discardPile, tile];
-      
-      // Check AI claims
-      let claimOptions = null;
-      let nextPlayer = 1;
-      
-      // Check each AI for claim
+
       for (let p = 1; p < 4; p++) {
         const winCheck = canWinWithTile(prev.hands[p], tile);
         const claim = aiCanClaim(prev.hands[p], tile);
-        
+
         if (winCheck.win) {
-          // AI wins
-          const finalHand = [...prev.hands[p].filter(t=>!t.isFlower), tile];
           return {
             ...prev,
             hands: prev.hands.map((h,i) => i===0 ? newHand : h),
@@ -675,15 +714,14 @@ function MahjongApp() {
             gameLog: [...prev.gameLog.slice(-20), `You discarded ${tileLabel(tile)}. Player ${p+1} (${prev.playerWinds[p]}) wins on your discard! 😱`]
           };
         }
-        
+
         if (claim && Math.random() > 0.4) {
-          // AI claims
           const aiHand = prev.hands[p].filter(t => !claim.tiles.slice(0,2).some(ct => ct.id === t.id));
           const discard = aiDiscard(aiHand);
           const finalHand = aiHand.filter(t => t.id !== discard.id);
           const newRevealed = [...prev.revealed[p], { type: claim.type, tiles: claim.tiles }];
           const aiDiscards = [...prev.discardPiles[p], discard];
-          
+
           return {
             ...prev,
             hands: prev.hands.map((h,i) => i===0 ? newHand : i===p ? finalHand : h),
@@ -698,9 +736,7 @@ function MahjongApp() {
           };
         }
       }
-      
-      const log = `You discarded ${tileLabel(tile)}`;
-      
+
       return {
         ...prev,
         hands: prev.hands.map((h, i) => i === 0 ? newHand : h),
@@ -710,71 +746,133 @@ function MahjongApp() {
         lastDiscardPlayer: 0,
         drawnTile: null,
         currentPlayer: 1,
-        gameLog: [...prev.gameLog.slice(-20), log],
+        gameLog: [...prev.gameLog.slice(-20), `You discarded ${tileLabel(tile)}`],
         claimOptions: null,
       };
     });
     setSelectedTile(null);
-  }, []);
-  
-  // Player claims a discard
+  }, [pushUndo, selectedTile]);
+
+  // Player clicks a claim button (Pong / Chow / Win / Skip)
   const handleClaim = useCallback((option) => {
+    if (!game.claimOptions) return;
+    const { discardedTile, fromPlayer } = game.claimOptions;
+
+    if (option.type === "skip") {
+      pushUndo(game, selectedTile);
+      setGame(prev => ({
+        ...prev,
+        claimOptions: null,
+        currentPlayer: (fromPlayer + 1) % 4 === 0 ? 1 : (fromPlayer + 1) % 4,
+      }));
+      setSelectedTile(null);
+      return;
+    }
+
+    if (option.type === "win") {
+      pushUndo(game, selectedTile);
+      setGame(prev => ({
+        ...prev,
+        claimOptions: null,
+        winner: 0,
+        phase: "won",
+        hands: prev.hands.map((h,i) => i===0 ? [...h, discardedTile] : h),
+        gameLog: [...prev.gameLog.slice(-20), `You win by claiming ${tileLabel(discardedTile)}! 🎉`]
+      }));
+      setSelectedTile(null);
+      return;
+    }
+
+    if (option.type === "pong") {
+      pushUndo(game, selectedTile);
+      // Auto-select the two matching tiles for pong
+      const matches = game.hands[0].filter(t => isPair(t, discardedTile));
+      const pongTiles = [matches[0], matches[1], discardedTile];
+      const tilesToRemove = [matches[0], matches[1]];
+      setGame(prev => {
+        const newHand = prev.hands[0].filter(t => !tilesToRemove.some(r => r.id === t.id));
+        return {
+          ...prev,
+          hands: prev.hands.map((h,i) => i===0 ? newHand : h),
+          revealed: prev.revealed.map((r,i) => i===0 ? [...r, { type: "pong", tiles: pongTiles }] : r),
+          claimOptions: null,
+          drawnTile: discardedTile,
+          currentPlayer: 0,
+          gameLog: [...prev.gameLog.slice(-20), `You PONG ${tileLabel(discardedTile)}! Now discard a tile.`]
+        };
+      });
+      setSelectedTile(null);
+      return;
+    }
+
+    if (option.type === "chow") {
+      // Show the chow picker instead of immediately claiming
+      const chowOptions = findChowOptions(game.hands[0], discardedTile);
+      if (chowOptions.length === 1) {
+        // Only one valid chow — confirm and complete automatically
+        pushUndo(game, selectedTile);
+        const chosenTiles = chowOptions[0];
+        const tilesToRemove = chosenTiles.filter(t => t.id !== discardedTile.id);
+        setGame(prev => {
+          const newHand = prev.hands[0].filter(t => !tilesToRemove.some(r => r.id === t.id));
+          return {
+            ...prev,
+            hands: prev.hands.map((h,i) => i===0 ? newHand : h),
+            revealed: prev.revealed.map((r,i) => i===0 ? [...r, { type: "chow", tiles: chosenTiles }] : r),
+            claimOptions: null,
+            drawnTile: discardedTile,
+            currentPlayer: 0,
+            gameLog: [...prev.gameLog.slice(-20), `You CHOW ${tileLabel(discardedTile)}! Now discard a tile.`]
+          };
+        });
+        setSelectedTile(null);
+      } else {
+        // Multiple chow options — show picker
+        setChowPicker({ discardedTile, fromPlayer, chowOptions, canWin: game.claimOptions.options.some(o=>o.type==="win") });
+        setGame(prev => ({ ...prev, claimOptions: null }));
+      }
+      return;
+    }
+  }, [game, selectedTile, pushUndo]);
+
+  // Player selects a specific chow combination from the picker
+  const handleChowPick = useCallback((chosenTiles) => {
+    if (!chowPicker) return;
+    const { discardedTile } = chowPicker;
+    pushUndo(game, selectedTile);
+    const tilesToRemove = chosenTiles.filter(t => t.id !== discardedTile.id);
     setGame(prev => {
-      if (!prev.claimOptions) return prev;
-      const { discardedTile, fromPlayer } = prev.claimOptions;
-      
-      if (option.type === "skip") {
-        return {
-          ...prev,
-          claimOptions: null,
-          currentPlayer: (fromPlayer + 1) % 4 === 0 ? 1 : (fromPlayer + 1) % 4,
-        };
-      }
-      
-      if (option.type === "win") {
-        return {
-          ...prev,
-          claimOptions: null,
-          winner: 0,
-          phase: "won",
-          hands: prev.hands.map((h,i) => i===0 ? [...h, discardedTile] : h),
-          gameLog: [...prev.gameLog.slice(-20), `You win by claiming ${tileLabel(discardedTile)}! 🎉`]
-        };
-      }
-      
-      // Pong or Chow claim
-      const tilesToRemove = option.tiles.filter(t => t.id !== discardedTile.id);
       const newHand = prev.hands[0].filter(t => !tilesToRemove.some(r => r.id === t.id));
-      const newRevealed = [...prev.revealed[0], { type: option.type, tiles: option.tiles }];
-      
       return {
         ...prev,
         hands: prev.hands.map((h,i) => i===0 ? newHand : h),
-        revealed: prev.revealed.map((r,i) => i===0 ? newRevealed : r),
+        revealed: prev.revealed.map((r,i) => i===0 ? [...r, { type: "chow", tiles: chosenTiles }] : r),
         claimOptions: null,
         drawnTile: discardedTile,
         currentPlayer: 0,
-        gameLog: [...prev.gameLog.slice(-20), `You claimed ${option.type.toUpperCase()} on ${tileLabel(discardedTile)}! Now discard a tile.`]
+        gameLog: [...prev.gameLog.slice(-20), `You CHOW ${tileLabel(discardedTile)}! Now discard a tile.`]
       };
     });
+    setChowPicker(null);
     setSelectedTile(null);
-  }, []);
-  
+  }, [chowPicker, game, selectedTile, pushUndo]);
+
   const handleWin = useCallback(() => {
-    setGame(prev => {
-      return {
-        ...prev,
-        winner: 0,
-        phase: "won",
-        gameLog: [...prev.gameLog.slice(-20), "You declare a winning hand! 🎉"]
-      };
-    });
-  }, []);
-  
+    pushUndo(game, selectedTile);
+    setGame(prev => ({
+      ...prev,
+      winner: 0,
+      phase: "won",
+      gameLog: [...prev.gameLog.slice(-20), "You declare a winning hand! 🎉"]
+    }));
+  }, [game, selectedTile, pushUndo]);
+
   const newGame = useCallback(() => {
     setGame(initGame());
     setSelectedTile(null);
     setCoaching(null);
+    setUndoStack([]);
+    setChowPicker(null);
   }, []);
   
   const { hands, deck, discardPile, discardPiles, revealed, flowers, currentPlayer, drawnTile, lastDiscard, gameLog, winner, phase, playerWinds, claimOptions } = game;
@@ -783,6 +881,89 @@ function MahjongApp() {
 
   // Check if player can win with drawn tile
   const canWinNow = drawnTile && canWin(playerHand.filter(t => !t.isFlower), revealed[0]).win;
+
+  // ── CHOW PICKER MODAL ───────────────────────────────────────────────────
+  const ChowPickerUI = () => {
+    if (!chowPicker) return null;
+    const { discardedTile, chowOptions } = chowPicker;
+    return (
+      <div style={{
+        position: "fixed", inset: 0, zIndex: 90,
+        background: "rgba(0,0,0,0.75)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        padding: 16,
+      }}>
+        <div style={{
+          background: "#0d2030",
+          border: "1px solid #d4a843",
+          borderRadius: 10,
+          padding: "20px 24px",
+          maxWidth: 420,
+          width: "100%",
+          boxShadow: "0 0 40px rgba(212,168,67,0.2)",
+        }}>
+          <div style={{ fontFamily: "'Cinzel', serif", color: "#d4a843", fontSize: 14, marginBottom: 6, letterSpacing: 1 }}>
+            CHOW — CHOOSE YOUR SEQUENCE
+          </div>
+          <div style={{ fontSize: 12, color: "#8a7a5a", marginBottom: 16, lineHeight: 1.6 }}>
+            The discarded tile is <span style={{ color: tileColor(discardedTile), fontWeight: "bold" }}>{tileLabel(discardedTile)}</span>.
+            Pick which sequence to form:
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {chowOptions.map((combo, i) => (
+              <button
+                key={i}
+                onClick={() => handleChowPick(combo)}
+                style={{
+                  background: "rgba(212,168,67,0.08)",
+                  border: "1px solid rgba(212,168,67,0.3)",
+                  borderRadius: 6,
+                  padding: "10px 14px",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  transition: "all 0.15s",
+                }}
+                onMouseEnter={e => e.currentTarget.style.background = "rgba(212,168,67,0.18)"}
+                onMouseLeave={e => e.currentTarget.style.background = "rgba(212,168,67,0.08)"}
+              >
+                <div style={{ display: "flex", gap: 4 }}>
+                  {combo.map((t, ti) => (
+                    <div key={ti} style={{ position: "relative" }}>
+                      <TileComponent tile={t} small />
+                      {t.id === discardedTile.id && (
+                        <div style={{
+                          position: "absolute", top: -4, right: -4,
+                          background: "#d4a843", color: "#000",
+                          borderRadius: "50%", width: 12, height: 12,
+                          fontSize: 8, display: "flex", alignItems: "center", justifyContent: "center",
+                          fontWeight: "bold",
+                        }}>★</div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <span style={{ fontSize: 11, color: "#8a7a5a" }}>
+                  {combo.map(t => tileLabel(t)).join(" · ")}
+                </span>
+              </button>
+            ))}
+          </div>
+          <button
+            className="btn-outline"
+            onClick={() => {
+              setChowPicker(null);
+              setGame(prev => ({ ...prev, claimOptions: { discardedTile: chowPicker.discardedTile, fromPlayer: chowPicker.fromPlayer, options: [{ type: "chow" }, ...(chowPicker.canWin ? [{ type: "win", tiles: [chowPicker.discardedTile] }] : [])] } }));
+            }}
+            style={{ marginTop: 14, fontSize: 11, width: "100%" }}
+          >
+            ← Cancel (go back to claim options)
+          </button>
+        </div>
+      </div>
+    );
+  };
 
   const COLORS = {
     bg: "#0a1628",
@@ -881,35 +1062,44 @@ function MahjongApp() {
       display: "flex",
       flexDirection: "column",
       background: `radial-gradient(ellipse at center, ${COLORS.felt} 0%, ${COLORS.table} 70%, ${COLORS.bg} 100%)`,
-      padding: compact ? 8 : 16,
-      gap: compact ? 6 : 12,
+      padding: compact ? 6 : 16,
+      gap: compact ? 4 : 10,
       minWidth: 0,
-      overflow: "auto",
+      overflowY: "auto",
+      overflowX: "hidden",
     }}>
-      {/* Opponent at top (West) */}
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
+      {/* Opponent at top (West) — strictly one row, no wrapping */}
+      <div style={{ flexShrink: 0, display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
         <div style={{ fontSize: 10, color: currentPlayer === 2 ? COLORS.goldLight : COLORS.textMuted, fontFamily: "'Cinzel', serif", letterSpacing: 1 }}>
           {currentPlayer === 2 && <span className="pulsing">▼ </span>}WEST · {hands[2].length}
         </div>
-        <div style={{ display: "flex", gap: 2, flexWrap: "wrap", justifyContent: "center" }}>
+        {/* Single scrollable row — never wraps */}
+        <div style={{ display: "flex", gap: 2, overflowX: "auto", maxWidth: "100%", paddingBottom: 2 }}>
           {revealed[2].map((set, si) => (
-            <div key={si} style={{ display: "flex", gap: 1, background: "rgba(212,168,67,0.1)", padding: "2px 3px", borderRadius: 3, border: "1px solid rgba(212,168,67,0.2)" }}>
+            <div key={si} style={{ display: "flex", gap: 1, flexShrink: 0, background: "rgba(212,168,67,0.1)", padding: "2px 3px", borderRadius: 3, border: "1px solid rgba(212,168,67,0.2)" }}>
               {set.tiles.map((t, ti) => <TileComponent key={ti} tile={t} small />)}
             </div>
           ))}
-          {hands[2].slice(0, compact ? 6 : 8).map((_, i) => <TileComponent key={i} tile={_} faceDown small />)}
+          {/* Cap face-down tiles shown to avoid overflow */}
+          {hands[2].slice(0, compact ? 5 : 7).map((_, i) => <TileComponent key={i} tile={_} faceDown small />)}
+          {hands[2].length > (compact ? 5 : 7) && (
+            <div style={{ fontSize: 9, color: COLORS.textMuted, alignSelf: "center", paddingLeft: 2, whiteSpace: "nowrap" }}>
+              +{hands[2].length - (compact ? 5 : 7)}
+            </div>
+          )}
         </div>
+        {/* Opponent discards — single scrollable row */}
         {discardPiles[2].length > 0 && (
-          <div style={{ display: "flex", gap: 2, flexWrap: "wrap", justifyContent: "center" }}>
-            {discardPiles[2].slice(-5).map((t, i) => <TileComponent key={i} tile={t} small />)}
+          <div style={{ display: "flex", gap: 2, overflowX: "auto", maxWidth: "100%", paddingBottom: 2 }}>
+            {discardPiles[2].slice(-8).map((t, i) => <TileComponent key={i} tile={t} small />)}
           </div>
         )}
       </div>
 
-      {/* Middle row */}
-      <div style={{ flex: 1, display: "flex", gap: compact ? 6 : 12, minHeight: compact ? 130 : 200 }}>
+      {/* Middle row — flex:1 but with minHeight so it doesn't collapse */}
+      <div style={{ flex: 1, minHeight: compact ? 110 : 160, display: "flex", gap: compact ? 4 : 10 }}>
         {/* South */}
-        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 3, minWidth: compact ? 40 : 60 }}>
+        <div style={{ flexShrink: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 2, width: compact ? 36 : 52 }}>
           <div style={{ fontSize: 9, color: currentPlayer === 1 ? COLORS.goldLight : COLORS.textMuted, fontFamily: "'Cinzel', serif", writingMode: "vertical-rl" }}>
             {currentPlayer === 1 && "▶ "}SOUTH
           </div>
@@ -918,8 +1108,8 @@ function MahjongApp() {
               {set.tiles.map((t, ti) => <TileComponent key={ti} tile={t} small />)}
             </div>
           ))}
-          {hands[1].slice(0, compact ? 3 : 5).map((_, i) => <TileComponent key={i} tile={_} faceDown small />)}
-          {discardPiles[1].slice(-3).map((t, i) => <TileComponent key={i} tile={t} small />)}
+          {hands[1].slice(0, compact ? 3 : 4).map((_, i) => <TileComponent key={i} tile={_} faceDown small />)}
+          {discardPiles[1].slice(-2).map((t, i) => <TileComponent key={i} tile={t} small />)}
         </div>
 
         {/* Center discard area */}
@@ -928,27 +1118,28 @@ function MahjongApp() {
           background: `radial-gradient(ellipse, rgba(15,48,32,0.8), rgba(10,22,40,0.6))`,
           border: `1px solid ${COLORS.border}`,
           borderRadius: 8,
-          padding: compact ? 6 : 12,
+          padding: compact ? 5 : 10,
           display: "flex",
           flexDirection: "column",
-          gap: 6,
+          gap: 5,
           overflow: "hidden",
+          minWidth: 0,
         }}>
-          <div style={{ fontSize: 10, color: COLORS.textMuted, fontFamily: "'Cinzel', serif", letterSpacing: 1, textAlign: "center" }}>DISCARD PILE</div>
+          <div style={{ fontSize: 10, color: COLORS.textMuted, fontFamily: "'Cinzel', serif", letterSpacing: 1, textAlign: "center", flexShrink: 0 }}>DISCARD PILE</div>
           <div style={{ flex: 1, display: "flex", flexWrap: "wrap", gap: 2, alignContent: "flex-start", overflow: "auto" }}>
-            {discardPile.slice(-(compact ? 20 : 30)).map((t, i) => (
+            {discardPile.slice(-(compact ? 18 : 28)).map((t, i) => (
               <TileComponent key={i} tile={t} small dimmed={lastDiscard && t.id !== lastDiscard.id && i < discardPile.length - 1} />
             ))}
           </div>
-          <div style={{ background: "rgba(0,0,0,0.3)", borderRadius: 4, padding: "5px 7px", maxHeight: compact ? 56 : 80, overflow: "auto", border: `1px solid ${COLORS.border}` }}>
-            {gameLog.slice(-3).map((log, i) => (
-              <div key={i} style={{ fontSize: 10, color: i === gameLog.slice(-3).length - 1 ? COLORS.text : COLORS.textMuted, lineHeight: 1.5 }}>{log}</div>
+          <div style={{ flexShrink: 0, background: "rgba(0,0,0,0.3)", borderRadius: 4, padding: "4px 6px", border: `1px solid ${COLORS.border}` }}>
+            {gameLog.slice(-2).map((log, i) => (
+              <div key={i} style={{ fontSize: 10, color: i === gameLog.slice(-2).length - 1 ? COLORS.text : COLORS.textMuted, lineHeight: 1.4 }}>{log}</div>
             ))}
           </div>
         </div>
 
         {/* North */}
-        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 3, minWidth: compact ? 40 : 60 }}>
+        <div style={{ flexShrink: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 2, width: compact ? 36 : 52 }}>
           <div style={{ fontSize: 9, color: currentPlayer === 3 ? COLORS.goldLight : COLORS.textMuted, fontFamily: "'Cinzel', serif", writingMode: "vertical-rl" }}>
             {currentPlayer === 3 && "◀ "}NORTH
           </div>
@@ -957,14 +1148,14 @@ function MahjongApp() {
               {set.tiles.map((t, ti) => <TileComponent key={ti} tile={t} small />)}
             </div>
           ))}
-          {hands[3].slice(0, compact ? 3 : 5).map((_, i) => <TileComponent key={i} tile={_} faceDown small />)}
-          {discardPiles[3].slice(-3).map((t, i) => <TileComponent key={i} tile={t} small />)}
+          {hands[3].slice(0, compact ? 3 : 4).map((_, i) => <TileComponent key={i} tile={_} faceDown small />)}
+          {discardPiles[3].slice(-2).map((t, i) => <TileComponent key={i} tile={t} small />)}
         </div>
       </div>
 
-      {/* Player hand area */}
-      <div style={{ background: "rgba(0,0,0,0.35)", borderRadius: 8, border: `1px solid ${COLORS.border}`, padding: compact ? "8px 10px" : "12px 16px" }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+      {/* Player hand area — flexShrink:0 so it NEVER gets cut off */}
+      <div style={{ flexShrink: 0, background: "rgba(0,0,0,0.38)", borderRadius: 8, border: `1px solid ${COLORS.border}`, padding: compact ? "7px 8px" : "10px 14px" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
           <div style={{ fontSize: 11, color: currentPlayer === 0 ? COLORS.goldLight : COLORS.textMuted, fontFamily: "'Cinzel', serif", letterSpacing: 0.5 }}>
             {currentPlayer === 0 && <span className="pulsing">▲ YOUR TURN · </span>}
             YOUR HAND · {playerHand.filter(t=>!t.isFlower).length} tiles
@@ -976,11 +1167,17 @@ function MahjongApp() {
         </div>
 
         {/* Claim banner */}
-        {claimOptions && (
-          <div style={{ background: "rgba(30,58,138,0.3)", border: "1px solid #3b6ea0", borderRadius: 6, padding: "8px 10px", marginBottom: 8, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <span style={{ fontSize: 11, color: "#93c5fd", fontFamily: "'Cinzel', serif" }}>CLAIM {tileLabel(claimOptions.discardedTile)}?</span>
+        {claimOptions && !chowPicker && (
+          <div style={{ background: "rgba(30,58,138,0.3)", border: "1px solid #3b6ea0", borderRadius: 6, padding: "7px 8px", marginBottom: 7, display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 11, color: "#93c5fd", fontFamily: "'Cinzel', serif" }}>
+              CLAIM {tileLabel(claimOptions.discardedTile)}?
+            </span>
             {claimOptions.options.map((opt, i) => (
-              <button key={i} className={opt.type === "win" ? "win-btn" : "claim-btn"} onClick={() => handleClaim(opt)} style={{ fontSize: 12, padding: "6px 12px" }}>
+              <button key={i}
+                className={opt.type === "win" ? "win-btn" : "claim-btn"}
+                onClick={() => handleClaim(opt)}
+                style={{ fontSize: 12, padding: "6px 12px" }}
+              >
                 {opt.type === "win" ? "🏆 WIN!" : opt.type === "pong" ? "PONG" : "CHOW"}
               </button>
             ))}
@@ -990,9 +1187,9 @@ function MahjongApp() {
 
         {/* Revealed sets */}
         {revealed[0].length > 0 && (
-          <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: 5, marginBottom: 6, overflowX: "auto", paddingBottom: 2 }}>
             {revealed[0].map((set, si) => (
-              <div key={si} style={{ display: "flex", gap: 2, background: "rgba(212,168,67,0.15)", padding: "3px 5px", borderRadius: 4, border: "1px solid rgba(212,168,67,0.3)" }}>
+              <div key={si} style={{ display: "flex", gap: 2, flexShrink: 0, background: "rgba(212,168,67,0.15)", padding: "3px 5px", borderRadius: 4, border: "1px solid rgba(212,168,67,0.3)" }}>
                 <span style={{ fontSize: 8, color: COLORS.textMuted, alignSelf: "center", marginRight: 2 }}>{set.type.toUpperCase()}</span>
                 {set.tiles.map((t, ti) => <TileComponent key={ti} tile={t} small />)}
               </div>
@@ -1000,7 +1197,7 @@ function MahjongApp() {
           </div>
         )}
 
-        {/* Hand tiles — horizontally scrollable on mobile */}
+        {/* Hand tiles — horizontally scrollable */}
         <div style={{ overflowX: "auto", paddingBottom: 4 }}>
           <div style={{ display: "flex", gap: compact ? 3 : 4, alignItems: "flex-end", minWidth: "min-content" }}>
             {playerHand.map((tile) => (
@@ -1026,25 +1223,35 @@ function MahjongApp() {
         </div>
 
         {/* Action buttons */}
-        <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap", alignItems: "center" }}>
-          {isMyTurn && !drawnTile && !claimOptions && (
+        <div style={{ display: "flex", gap: 7, marginTop: 8, flexWrap: "wrap", alignItems: "center" }}>
+          {isMyTurn && !drawnTile && !claimOptions && !chowPicker && (
             <button className="btn-gold" onClick={handleDraw} style={{ fontSize: 13, padding: "9px 20px" }}>Draw Tile</button>
           )}
-          {selectedTile && drawnTile && isMyTurn && !claimOptions && (
+          {selectedTile && drawnTile && isMyTurn && !claimOptions && !chowPicker && (
             <button className="btn-gold" onClick={() => handleDiscard(selectedTile)} style={{ fontSize: 13, padding: "9px 16px" }}>
               Discard {tileLabel(selectedTile)}
             </button>
           )}
-          {canWinNow && (
+          {canWinNow && !chowPicker && (
             <button className="win-btn" onClick={handleWin} style={{ fontSize: 14, padding: "9px 18px" }}>🏆 WIN!</button>
           )}
-          {isMyTurn && drawnTile && !claimOptions && !canWinNow && (
+          {isMyTurn && drawnTile && !claimOptions && !canWinNow && !chowPicker && (
             <div style={{ fontSize: 10, color: COLORS.textMuted }}>Tap a tile to select · tap again or hit Discard</div>
           )}
-          {!isMyTurn && !claimOptions && (
+          {!isMyTurn && !claimOptions && !chowPicker && (
             <div style={{ fontSize: 11, color: COLORS.textMuted }} className="pulsing">
               Waiting for {opponentLabels[currentPlayer]}…
             </div>
+          )}
+          {undoStack.length > 0 && !chowPicker && (
+            <button
+              className="btn-outline"
+              onClick={handleUndo}
+              style={{ fontSize: 11, padding: "7px 12px", marginLeft: "auto", opacity: 0.85 }}
+              title={`Undo last move (${undoStack.length} left)`}
+            >
+              ↩ Undo {undoStack.length > 1 ? `(${undoStack.length})` : ""}
+            </button>
           )}
         </div>
       </div>
@@ -1122,6 +1329,9 @@ function MahjongApp() {
           <button className="btn-gold" onClick={newGame} style={{ marginTop: 8, fontSize: 15, padding: "12px 32px" }}>Play Again</button>
         </div>
       )}
+
+      {/* Chow picker modal */}
+      <ChowPickerUI />
 
       {/* ── DESKTOP LAYOUT (side-by-side, >700px) ───────────────────────── */}
       <div className="desktop-layout" style={{ flex: 1, overflow: "hidden", minHeight: 0 }}>
