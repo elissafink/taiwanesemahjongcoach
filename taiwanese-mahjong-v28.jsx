@@ -1,18 +1,5 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Taiwanese Mahjong</title>
-<script src="https://unpkg.com/react@18/umd/react.development.js"></script>
-<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&display=swap" rel="stylesheet">
-</head>
-<body style="margin:0;padding:0;background:#0a1628;">
-<div id="root"></div>
-<script type="text/babel">
-const { useState, useEffect, useCallback, useRef } = React;
+import { useState, useEffect, useCallback, useRef } from "react";
+
 // ============================================================
 // TILE DEFINITIONS
 // ============================================================
@@ -2083,9 +2070,3 @@ Give specific, actionable advice. Keep responses under 180 words.`;
     </div>
   );
 }
-
-const root = ReactDOM.createRoot(document.getElementById('root'));
-root.render(<MahjongApp />);
-</script>
-</body>
-</html>
