@@ -48,8 +48,7 @@
 </head>
 <body style="margin:0;padding:0;background:#0a1628;">
 <div id="root"></div>
-<script>
-/**
+<script>/**
  * @license React
  * react.production.min.js
  *
@@ -80,10 +79,8 @@ render:a}};c.isValidElement=M;c.lazy=function(a){return{$$typeof:Aa,_payload:{_s
 c.useEffect=function(a,b){return g.current.useEffect(a,b)};c.useId=function(){return g.current.useId()};c.useImperativeHandle=function(a,b,c){return g.current.useImperativeHandle(a,b,c)};c.useInsertionEffect=function(a,b){return g.current.useInsertionEffect(a,b)};c.useLayoutEffect=function(a,b){return g.current.useLayoutEffect(a,b)};c.useMemo=function(a,b){return g.current.useMemo(a,b)};c.useReducer=function(a,b,c){return g.current.useReducer(a,b,c)};c.useRef=function(a){return g.current.useRef(a)};
 c.useState=function(a){return g.current.useState(a)};c.useSyncExternalStore=function(a,b,c){return g.current.useSyncExternalStore(a,b,c)};c.useTransition=function(){return g.current.useTransition()};c.version="18.3.1"});
 })();
-
 </script>
-<script>
-/**
+<script>/**
  * @license React
  * react-dom.production.min.js
  *
@@ -350,15 +347,10 @@ c,!1,d,e);a[Ja]=b.current;sc(8===a.nodeType?a.parentNode:a);return new Xf(b)};Q.
 var d=null!=c&&c.hydratedSources||null,e=!1,f="",g=aj;null!==c&&void 0!==c&&(!0===c.unstable_strictMode&&(e=!0),void 0!==c.identifierPrefix&&(f=c.identifierPrefix),void 0!==c.onRecoverableError&&(g=c.onRecoverableError));b=Wi(b,null,a,1,null!=c?c:null,e,!1,f,g);a[Ja]=b.current;sc(a);if(d)for(a=0;a<d.length;a++)c=d[a],e=c._getVersion,e=e(c._source),null==b.mutableSourceEagerHydrationData?b.mutableSourceEagerHydrationData=[c,e]:b.mutableSourceEagerHydrationData.push(c,e);return new Ud(b)};Q.render=
 function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmountComponentAtNode=function(a){if(!Vd(a))throw Error(m(40));return a._reactRootContainer?(yb(function(){Wd(null,null,a,!1,function(){a._reactRootContainer=null;a[Ja]=null})}),!0):!1};Q.unstable_batchedUpdates=Tf;Q.unstable_renderSubtreeIntoContainer=function(a,b,c,d){if(!Vd(c))throw Error(m(200));if(null==a||void 0===a._reactInternals)throw Error(m(38));return Wd(a,b,c,!1,d)};Q.version="18.3.1-next-f1338f8080-20240426"});
 })();
-
 </script>
 <script>
-const {
-  useState,
-  useEffect,
-  useCallback,
-  useRef
-} = React;
+import { useState, useEffect, useCallback, useRef } from "react";
+
 // ============================================================
 // TILE DEFINITIONS
 // ============================================================
@@ -1159,7 +1151,7 @@ function findChowOptions(hand, discardedTile) {
 // ============================================================
 // MAIN APP
 // ============================================================
-function MahjongApp() {
+export default function MahjongApp() {
   const [game, setGame] = useState(() => initGame());
   const [selectedTile, setSelectedTile] = useState(null);
   const [coaching, setCoaching] = useState(null);
@@ -2521,13 +2513,14 @@ Give specific, actionable advice. Keep responses under 180 words.`;
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
-      width: compact ? 34 : 48,
+      width: compact ? 40 : 62,
       flexShrink: 0,
       display: "flex",
       flexDirection: "column",
       alignItems: "center",
       gap: 2,
-      overflow: "hidden"
+      overflowY: "auto",
+      overflowX: "hidden"
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
@@ -2636,13 +2629,14 @@ Give specific, actionable advice. Keep responses under 180 words.`;
     }
   }, entry)))), /*#__PURE__*/React.createElement("div", {
     style: {
-      width: compact ? 34 : 48,
+      width: compact ? 40 : 62,
       flexShrink: 0,
       display: "flex",
       flexDirection: "column",
       alignItems: "center",
       gap: 2,
-      overflow: "hidden"
+      overflowY: "auto",
+      overflowX: "hidden"
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
@@ -2915,7 +2909,43 @@ Give specific, actionable advice. Keep responses under 180 words.`;
       display: "flex",
       flexDirection: "column"
     }
-  }, /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("style", null, `
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;600;700&family=Cinzel:wght@400;600&display=swap');
+        * { box-sizing: border-box; }
+        html, body { margin: 0; padding: 0; }
+        ::-webkit-scrollbar { width: 4px; height: 4px; }
+        ::-webkit-scrollbar-track { background: #071020; }
+        ::-webkit-scrollbar-thumb { background: #d4a843; border-radius: 2px; }
+        .tile-hover:hover { transform: translateY(-3px); }
+        .btn-gold { background: linear-gradient(135deg, #d4a843, #f0c060); color: #0a0a0a; border: none; padding: 8px 18px; border-radius: 4px; cursor: pointer; font-weight: bold; font-family: 'Cinzel', serif; font-size: 13px; transition: all 0.2s; letter-spacing: 0.5px; -webkit-tap-highlight-color: transparent; }
+        .btn-gold:active { transform: scale(0.97); }
+        .btn-outline { background: transparent; color: #d4a843; border: 1px solid #d4a843; padding: 6px 14px; border-radius: 4px; cursor: pointer; font-family: 'Cinzel', serif; font-size: 12px; transition: all 0.2s; -webkit-tap-highlight-color: transparent; }
+        .btn-outline:active { background: rgba(212,168,67,0.15); }
+        .pulsing { animation: pulse 1.5s ease-in-out infinite; }
+        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.6} }
+        .claim-btn { background: linear-gradient(135deg, #1a3a5c, #0d2040); color: #60a5fa; border: 1px solid #3b6ea0; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 13px; font-weight: bold; font-family: 'Cinzel', serif; -webkit-tap-highlight-color: transparent; }
+        .claim-btn:active { opacity: 0.8; }
+        .win-btn { background: linear-gradient(135deg, #7c2d12, #dc2626); color: white; border: 1px solid #ef4444; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: bold; font-family: 'Cinzel', serif; animation: pulse 1s ease-in-out infinite; -webkit-tap-highlight-color: transparent; }
+        .tab-btn { background: transparent; border: none; color: #8a7a5a; cursor: pointer; padding: 10px 0; font-size: 11px; font-family: 'Cinzel', serif; letter-spacing: 0.5px; flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; -webkit-tap-highlight-color: transparent; transition: color 0.2s; }
+        .tab-btn.active { color: #d4a843; }
+        .tab-btn.active .tab-indicator { opacity: 1; }
+        .tab-indicator { width: 20px; height: 2px; background: #d4a843; border-radius: 1px; opacity: 0; transition: opacity 0.2s; }
+        .sticky-header { position: sticky; top: 0; z-index: 50; }
+
+        /* ── RESPONSIVE BREAKPOINTS ─────────────────────────── */
+        .desktop-layout { display: flex; }
+        .mobile-layout { display: none; }
+        .mobile-tabbar { display: none; }
+
+        @media (max-width: 700px) {
+          .desktop-layout { display: none !important; }
+          .mobile-layout { display: block !important; }
+          .mobile-tabbar { display: flex !important; position: sticky; bottom: 0; z-index: 40; }
+          .header-subtitle { display: none; }
+          .header-tiles-count { display: none; }
+          .header-title { font-size: 14px !important; letter-spacing: 1px !important; }
+        }
+      `), /*#__PURE__*/React.createElement("div", {
     className: "sticky-header",
     style: {
       borderBottom: `1px solid ${COLORS.border}`,
