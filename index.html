@@ -349,8 +349,12 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
 })();
 </script>
 <script>
-import { useState, useEffect, useCallback, useRef } from "react";
-
+const {
+  useState,
+  useEffect,
+  useCallback,
+  useRef
+} = React;
 // ============================================================
 // TILE DEFINITIONS
 // ============================================================
@@ -971,36 +975,19 @@ function canWinWithTile(hand, tile) {
 // ============================================================
 function initGame() {
   let deck = shuffle(buildDeck());
-  const flowers = [];
-  const deadWall = [];
 
-  // Separate flowers for dead wall
+  // Keep flowers at end of deck so they're drawn during play, not dealt initially
   const mainDeck = deck.filter(t => !t.isFlower);
-  const flowerTiles = deck.filter(t => t.isFlower);
-  deck = shuffle([...mainDeck, ...flowerTiles]);
+  const flowerTiles = shuffle(deck.filter(t => t.isFlower));
+  deck = [...mainDeck, ...flowerTiles];
 
-  // Deal 16 tiles to each player
+  // Deal 16 tiles to each player (from non-flower portion only)
   const hands = [[], [], [], []];
-  const allDealt = deck.splice(0, 64);
+  const allDealt = mainDeck.splice(0, 64);
   for (let i = 0; i < 64; i++) hands[i % 4].push(allDealt[i]);
 
-  // Replace flowers
-  const remainingDeck = deck;
-  for (let p = 0; p < 4; p++) {
-    const flrs = hands[p].filter(t => t.isFlower);
-    hands[p] = hands[p].filter(t => !t.isFlower);
-    for (const f of flrs) {
-      if (remainingDeck.length > 0) {
-        let replacement = remainingDeck.shift();
-        while (replacement.isFlower && remainingDeck.length > 0) {
-          flowers.push(replacement);
-          replacement = remainingDeck.shift();
-        }
-        if (!replacement.isFlower) hands[p].push(replacement);else flowers.push(replacement);
-      }
-      flowers.push(f);
-    }
-  }
+  // Remaining deck = undealt main tiles + flower tiles at end
+  const remainingDeck = [...mainDeck, ...flowerTiles];
 
   // Sort player hand
   hands[0] = sortHand(hands[0]);
@@ -1011,7 +998,7 @@ function initGame() {
     revealed: [[], [], [], []],
     // revealed sets per player
     flowers: [[], [], [], []],
-    // flowers per player
+    // flowers per player — drawn during play
     discardPiles: [[], [], [], []],
     // each player's discards
     discardPile: [],
@@ -1019,10 +1006,6 @@ function initGame() {
     currentPlayer: 0,
     drawnTile: null,
     waitingForDiscard: true,
-    // player 0 starts with 16 tiles, needs to discard 1 first? 
-    // Actually in TW mahjong dealer gets 17, others 16. Let's give player 0 (dealer) one extra draw
-    lastDiscard: null,
-    lastDiscardPlayer: null,
     gameLog: ["Game started! You are the Dealer (East). You have 16 tiles. Draw a tile to begin."],
     winner: null,
     winInfo: null,
@@ -1151,7 +1134,7 @@ function findChowOptions(hand, discardedTile) {
 // ============================================================
 // MAIN APP
 // ============================================================
-export default function MahjongApp() {
+function MahjongApp() {
   const [game, setGame] = useState(() => initGame());
   const [selectedTile, setSelectedTile] = useState(null);
   const [coaching, setCoaching] = useState(null);
