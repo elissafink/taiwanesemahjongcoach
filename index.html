@@ -916,52 +916,165 @@ function analyzeHand(hand, discardPile, revealedSets, allPlayerDiscards, mode = 
   };
 }
 
-// AI discard logic
-function aiDiscard(hand) {
+// AI discard logic — smart: uses full hand analysis including revealed sets and discard pile
+function aiDiscard(hand, revealedSets = [], discardPile = []) {
   const playable = hand.filter(t => !t.isFlower);
-  const analysis = analyzeHand(playable, [], [], []);
-  if (analysis.bestDiscard) return analysis.bestDiscard;
+  if (playable.length === 0) return hand[0];
 
-  // Fallback: discard first isolated or honor tile
-  const honor = playable.find(t => t.suit === "wind" || t.suit === "dragon");
-  if (honor) return honor;
-  return playable[Math.floor(Math.random() * playable.length)];
+  // Count how many of each tile key are left (not yet discarded)
+  // Used to assess whether a needed tile is still drawable
+  const discardedCounts = {};
+  for (const t of discardPile) {
+    const key = `${t.suit}-${t.value}`;
+    discardedCounts[key] = (discardedCounts[key] || 0) + 1;
+  }
+  const isDead = (suit, value) => (discardedCounts[`${suit}-${value}`] || 0) >= 4;
+
+  // Score each tile as a discard candidate — higher = better to discard
+  function discardScore(tile, remaining) {
+    let score = 0;
+    const {
+      suit,
+      value
+    } = tile;
+
+    // Honor tiles (winds/dragons) — good to discard unless in a pair/triplet
+    if (suit === "wind" || suit === "dragon") {
+      const matches = remaining.filter(t => isPair(t, tile)).length;
+      if (matches === 0) score += 30; // isolated honor
+      else if (matches === 1) score += 10; // honor pair — keepable but costly
+      return score;
+    }
+
+    // Count connections: tiles that form sequences or pairs with this tile
+    const pairs = remaining.filter(t => t.id !== tile.id && isPair(t, tile)).length;
+    const seqLeft = remaining.filter(t => t.suit === suit && t.value === value - 1).length;
+    const seqLeft2 = remaining.filter(t => t.suit === suit && t.value === value - 2).length;
+    const seqRight = remaining.filter(t => t.suit === suit && t.value === value + 1).length;
+    const seqRight2 = remaining.filter(t => t.suit === suit && t.value === value + 2).length;
+    const connections = pairs * 3 + seqLeft + seqLeft2 + seqRight + seqRight2;
+    score -= connections * 4; // more connected = less desirable to discard
+
+    // Edge tiles (1, 9) are harder to use in sequences
+    if (value === 1 || value === 9) score += 5;
+    // Near-edge (2, 8) — slightly weaker
+    if (value === 2 || value === 8) score += 2;
+
+    // If needed tiles are dead (all discarded), the connection is worthless
+    if (seqLeft && isDead(suit, value - 1)) score += 6;
+    if (seqRight && isDead(suit, value + 1)) score += 6;
+    return score;
+  }
+
+  // Score all tiles, pick the one with highest discard score
+  const scored = playable.map(tile => {
+    const remaining = playable.filter(t => t.id !== tile.id);
+    return {
+      tile,
+      score: discardScore(tile, remaining)
+    };
+  });
+  scored.sort((a, b) => b.score - a.score);
+  return scored[0].tile;
 }
 
-// Check if AI can claim a discard
-function aiCanClaim(hand, discardedTile) {
+// Check if AI hand is tenpai (one tile away from winning)
+function isTenpai(hand, revealedSets = []) {
+  const playable = hand.filter(t => !t.isFlower);
+  if (playable.length !== 13) return false;
+  // Try all possible completing tiles
+  const suits = ["man", "bam", "circle"];
+  for (const s of suits) {
+    for (let v = 1; v <= 9; v++) {
+      const test = [...playable, {
+        suit: s,
+        value: v,
+        id: "test",
+        isFlower: false
+      }];
+      if (findWinningGroups(test) || isAllPairs(test)) return true;
+    }
+  }
+  for (const wind of ["East", "South", "West", "North"]) {
+    const test = [...playable, {
+      suit: "wind",
+      value: wind,
+      id: "test",
+      isFlower: false
+    }];
+    if (findWinningGroups(test)) return true;
+  }
+  for (const dragon of ["Red", "Green", "White"]) {
+    const test = [...playable, {
+      suit: "dragon",
+      value: dragon,
+      id: "test",
+      isFlower: false
+    }];
+    if (findWinningGroups(test)) return true;
+  }
+  return false;
+}
+
+// Check if AI can claim a discard — strategic version
+// Only claims when it materially improves the hand toward winning
+function aiCanClaim(hand, discardedTile, revealedSets = [], discardPile = []) {
   const playable = hand.filter(t => !t.isFlower);
 
-  // Check pong
-  const matches = playable.filter(t => isPair(t, discardedTile));
-  if (matches.length >= 2) return {
-    type: "pong",
-    tiles: [matches[0], matches[1], discardedTile]
+  // Always claim for win
+  if (canWinWithTile(hand, discardedTile).win) return {
+    type: "win"
   };
 
-  // Check chow (sequence)
+  // Count sets already have (revealed + those forming in hand)
+  const totalSetsNeeded = 4 - revealedSets.length;
+
+  // Check pong — only claim if triplet genuinely advances the hand
+  const matches = playable.filter(t => isPair(t, discardedTile));
+  if (matches.length >= 2) {
+    // After ponging, hand loses 2 tiles. Check if the remaining hand
+    // can still realistically form the remaining sets needed.
+    const afterPong = playable.filter(t => t.id !== matches[0].id && t.id !== matches[1].id);
+    const setsInHand = countCompleteSets(afterPong);
+    // Claim pong if we're making progress (have sets forming) or if tenpai likely
+    if (setsInHand >= totalSetsNeeded - 2 || totalSetsNeeded <= 2) {
+      return {
+        type: "pong",
+        tiles: [matches[0], matches[1], discardedTile]
+      };
+    }
+    // Also claim pong 60% of the time as tactical aggression
+    if (Math.random() < 0.6) {
+      return {
+        type: "pong",
+        tiles: [matches[0], matches[1], discardedTile]
+      };
+    }
+  }
+
+  // Check chow (only left player can chow — handled at call site)
   if (["man", "bam", "circle"].includes(discardedTile.suit)) {
     const v = discardedTile.value;
     const suitTiles = playable.filter(t => t.suit === discardedTile.suit);
-    // v-2, v-1
     const m2 = suitTiles.find(t => t.value === v - 2);
     const m1 = suitTiles.find(t => t.value === v - 1);
     const p1 = suitTiles.find(t => t.value === v + 1);
     const p2 = suitTiles.find(t => t.value === v + 2);
-    if (m2 && m1) return {
-      type: "chow",
-      tiles: [m2, m1, discardedTile]
-    };
-    if (m1 && p1) return {
-      type: "chow",
-      tiles: [m1, discardedTile, p1]
-    };
-    if (p1 && p2) return {
-      type: "chow",
-      tiles: [discardedTile, p1, p2]
-    };
+    const chow = m2 && m1 ? [m2, m1, discardedTile] : m1 && p1 ? [m1, discardedTile, p1] : p1 && p2 ? [discardedTile, p1, p2] : null;
+    if (chow && Math.random() < 0.5) {
+      return {
+        type: "chow",
+        tiles: chow
+      };
+    }
   }
   return null;
+}
+
+// Count complete sets (triplets + sequences) in a hand
+function countCompleteSets(tiles) {
+  const groups = findSets(sortHand(tiles));
+  return groups ? groups.filter(g => g.type !== "pair").length : 0;
 }
 
 // Check if player can win with a specific tile
@@ -1444,7 +1557,7 @@ Give specific, actionable advice. Keep responses under 180 words.`;
             gameLog: [...newGame.gameLog, `Player ${p + 1} (${newGame.playerWinds[p]}) wins by self-draw! 🎉`]
           };
         }
-        const discard = aiDiscard(newGame.hands[p]);
+        const discard = aiDiscard(newGame.hands[p], newGame.revealed[p], newGame.discardPile);
         newGame.hands[p] = newGame.hands[p].filter(t => t.id !== discard.id);
         newGame.discardPiles[p].push(discard);
         newGame.discardPile = [...newGame.discardPile, discard];
@@ -1452,6 +1565,45 @@ Give specific, actionable advice. Keep responses under 180 words.`;
         newGame.lastDiscardPlayer = p;
         const log = `${newGame.playerWinds[p]} discards ${tlRef(discard)}`;
         newGame.gameLog = [...newGame.gameLog.slice(-20), log];
+
+        // Check if other AI players can claim (pong/win only — chow only for immediate left)
+        let claimed = false;
+        for (let q = 1; q <= 3; q++) {
+          const claimer = (p + q) % 4;
+          if (claimer === 0) break; // human gets offered claim via UI, stop here
+          const winCheck = canWinWithTile(newGame.hands[claimer], discard);
+          if (winCheck.win) {
+            newGame.winner = claimer;
+            newGame.phase = "won";
+            newGame.gameLog = [...newGame.gameLog.slice(-20), `${newGame.playerWinds[claimer]} wins by claiming ${tlRef(discard)}! 🎉`];
+            claimed = true;
+            break;
+          }
+          const canChowAI = q === 1 && ["man", "bam", "circle"].includes(discard.suit);
+          const aiClaim = aiCanClaim(newGame.hands[claimer], discard, newGame.revealed[claimer], newGame.discardPile);
+          if (aiClaim && (aiClaim.type !== "chow" || canChowAI)) {
+            const claimTiles = aiClaim.tiles || [];
+            const tilesToRemove = claimTiles.filter(t => t.id !== discard.id);
+            newGame.hands[claimer] = newGame.hands[claimer].filter(t => !tilesToRemove.some(r => r.id === t.id));
+            newGame.revealed[claimer] = [...newGame.revealed[claimer], {
+              type: aiClaim.type,
+              tiles: claimTiles
+            }];
+            const aiDisc = aiDiscard(newGame.hands[claimer], newGame.revealed[claimer], newGame.discardPile);
+            newGame.hands[claimer] = newGame.hands[claimer].filter(t => t.id !== aiDisc.id);
+            newGame.discardPiles[claimer] = [...newGame.discardPiles[claimer], aiDisc];
+            newGame.discardPile = [...newGame.discardPile, aiDisc];
+            newGame.lastDiscard = aiDisc;
+            newGame.lastDiscardPlayer = claimer;
+            newGame.gameLog = [...newGame.gameLog.slice(-20), `${newGame.playerWinds[claimer]} ${aiClaim.type.toUpperCase()}s ${tlRef(discard)} and discards ${tlRef(aiDisc)}`];
+            newGame.currentPlayer = (claimer + 1) % 4;
+            claimed = true;
+            break;
+          }
+        }
+        if (claimed) {
+          return newGame;
+        }
 
         // Check if player 0 can claim
         // Chow only valid for the player immediately to the left of the discarder
@@ -1540,7 +1692,7 @@ Give specific, actionable advice. Keep responses under 180 words.`;
       const newDiscardPile = [...prev.discardPile, tile];
       for (let p = 1; p < 4; p++) {
         const winCheck = canWinWithTile(prev.hands[p], tile);
-        const claim = aiCanClaim(prev.hands[p], tile);
+        const claim = aiCanClaim(prev.hands[p], tile, prev.revealed[p], newDiscardPile);
         if (winCheck.win) {
           return {
             ...prev,
