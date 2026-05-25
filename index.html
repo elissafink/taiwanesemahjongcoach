@@ -2448,7 +2448,12 @@ Give specific, actionable advice. Keep responses under 180 words.`;
     }
   }, currentPlayer === 2 && /*#__PURE__*/React.createElement("span", {
     className: "pulsing"
-  }, "\u25BC "), "WEST \xB7 ", hands[2].length + revealed[2].reduce((s, r) => s + r.tiles.length, 0)), /*#__PURE__*/React.createElement("div", {
+  }, "\u25BC "), "WEST \xB7 ", hands[2].filter(t => !t.isFlower).length + revealed[2].reduce((s, r) => s + 3, 0), flowers[2].length > 0 && /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: "#22c55e",
+      marginLeft: 6
+    }
+  }, "\uD83C\uDF38\xD7", flowers[2].length)), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 2,
@@ -2474,13 +2479,13 @@ Give specific, actionable advice. Keep responses under 180 words.`;
     tile: t,
     small: true,
     mode: mode
-  })))), hands[2].slice(0, compact ? 5 : 7).map((_, i) => /*#__PURE__*/React.createElement(TileComponent, {
+  })))), hands[2].filter(t => !t.isFlower).slice(0, compact ? 5 : 9).map((_, i) => /*#__PURE__*/React.createElement(TileComponent, {
     key: i,
     tile: _,
     faceDown: true,
     small: true,
     mode: mode
-  })), hands[2].length > (compact ? 5 : 7) && /*#__PURE__*/React.createElement("div", {
+  })), hands[2].filter(t => !t.isFlower).length > (compact ? 5 : 9) && /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 9,
       color: COLORS.textMuted,
@@ -2489,7 +2494,7 @@ Give specific, actionable advice. Keep responses under 180 words.`;
       whiteSpace: "nowrap",
       flexShrink: 0
     }
-  }, "+", hands[2].length - (compact ? 5 : 7))), discardPiles[2].length > 0 && /*#__PURE__*/React.createElement("div", {
+  }, "+", hands[2].filter(t => !t.isFlower).length - (compact ? 5 : 9))), discardPiles[2].length > 0 && /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 2,
@@ -2530,7 +2535,7 @@ Give specific, actionable advice. Keep responses under 180 words.`;
       writingMode: "vertical-rl",
       marginBottom: 2
     }
-  }, currentPlayer === 1 && "▶ ", "SOUTH"), revealed[1].map((set, si) => /*#__PURE__*/React.createElement("div", {
+  }, currentPlayer === 1 && "▶ ", "SOUTH", flowers[1].length > 0 ? ` 🌸${flowers[1].length}` : ""), revealed[1].map((set, si) => /*#__PURE__*/React.createElement("div", {
     key: si,
     style: {
       display: "flex",
@@ -2555,7 +2560,7 @@ Give specific, actionable advice. Keep responses under 180 words.`;
       gap: 1,
       justifyContent: "center"
     }
-  }, hands[1].slice(0, compact ? 4 : 5).map((_, i) => /*#__PURE__*/React.createElement(TileComponent, {
+  }, hands[1].filter(t => !t.isFlower).slice(0, compact ? 4 : 5).map((_, i) => /*#__PURE__*/React.createElement(TileComponent, {
     key: i,
     tile: _,
     faceDown: true,
@@ -2646,7 +2651,7 @@ Give specific, actionable advice. Keep responses under 180 words.`;
       writingMode: "vertical-rl",
       marginBottom: 2
     }
-  }, currentPlayer === 3 && "◀ ", "NORTH"), revealed[3].map((set, si) => /*#__PURE__*/React.createElement("div", {
+  }, currentPlayer === 3 && "◀ ", "NORTH", flowers[3].length > 0 ? ` 🌸${flowers[3].length}` : ""), revealed[3].map((set, si) => /*#__PURE__*/React.createElement("div", {
     key: si,
     style: {
       display: "flex",
@@ -2671,7 +2676,7 @@ Give specific, actionable advice. Keep responses under 180 words.`;
       gap: 1,
       justifyContent: "center"
     }
-  }, hands[3].slice(0, compact ? 4 : 5).map((_, i) => /*#__PURE__*/React.createElement(TileComponent, {
+  }, hands[3].filter(t => !t.isFlower).slice(0, compact ? 4 : 5).map((_, i) => /*#__PURE__*/React.createElement(TileComponent, {
     key: i,
     tile: _,
     faceDown: true,
