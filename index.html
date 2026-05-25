@@ -700,7 +700,7 @@ function findChowOptions(hand, discardedTile) {
 // ============================================================
 // MAIN APP
 // ============================================================
-export default function MahjongApp() {
+function MahjongApp() {
   const [game, setGame] = useState(() => initGame());
   const [selectedTile, setSelectedTile] = useState(null);
   const [coaching, setCoaching] = useState(null);
