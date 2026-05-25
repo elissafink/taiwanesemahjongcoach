@@ -1,27 +1,18 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <title>Taiwanese Mahjong Coach</title>
-  <meta name="description" content="Taiwanese Mahjong with AI coaching — learn strategy as you play" />
-  <meta name="theme-color" content="#0a1628" />
-  <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🀄</text></svg>" />
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
-  <style>
-    html, body, #root { margin: 0; padding: 0; min-height: 100%; width: 100%; background: #0a1628; }
-    * { box-sizing: border-box; }
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Taiwanese Mahjong</title>
+<script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&display=swap" rel="stylesheet">
 </head>
-<body>
-  <div id="root"></div>
-  <script type="text/babel">
-    const { useState, useEffect, useCallback, useRef } = React;
-
+<body style="margin:0;padding:0;background:#0a1628;">
+<div id="root"></div>
+<script type="text/babel">
+import { useState, useEffect, useCallback, useRef } from "react";
 
 // ============================================================
 // TILE DEFINITIONS
@@ -710,7 +701,7 @@ function findChowOptions(hand, discardedTile) {
 // ============================================================
 // MAIN APP
 // ============================================================
-function MahjongApp() {
+export default function MahjongApp() {
   const [game, setGame] = useState(() => initGame());
   const [selectedTile, setSelectedTile] = useState(null);
   const [coaching, setCoaching] = useState(null);
@@ -1251,11 +1242,20 @@ Give specific, actionable advice. Keep responses under 180 words.`;
   };
 
   // Kong from hand (concealed): player has 4 identical tiles in concealed hand
-  const handleConcealedKong = useCallback((kongTiles) => {
+  // tileKey identifies which group to kong (suit-value), computed inside setGame to avoid stale closure
+  const handleConcealedKong = useCallback((tileKey) => {
     pushUndo(game, selectedTile);
     setGame(prev => {
+      // Recompute kong tiles from current state to avoid stale closure mismatch
+      const groups = {};
+      for (const t of prev.hands[0].filter(t => !t.isFlower)) {
+        const key = `${t.suit}-${t.value}`;
+        if (!groups[key]) groups[key] = [];
+        groups[key].push(t);
+      }
+      const kongTiles = groups[tileKey];
+      if (!kongTiles || kongTiles.length < 4) return prev; // safety check
       const newHand = prev.hands[0].filter(t => !kongTiles.some(k => k.id === t.id));
-      // Kong set is stored with isConcealed:true — displayed face-down except the two outer tiles
       const withKong = {
         ...prev,
         hands: prev.hands.map((h,i) => i===0 ? newHand : h),
@@ -1293,10 +1293,13 @@ Give specific, actionable advice. Keep responses under 180 words.`;
   }, [game, selectedTile, pushUndo]);
 
   // Upgrade kong: player has exposed pong, draws the 4th matching tile
-  const handleUpgradeKong = useCallback((pongSet) => {
+  const handleUpgradeKong = useCallback((pongKey) => {
     if (!game.drawnTile) return;
     pushUndo(game, selectedTile);
     setGame(prev => {
+      if (!prev.drawnTile) return prev;
+      const pongSet = prev.revealed[0].find(s => s.type === "pong" && `${s.tiles[0].suit}-${s.tiles[0].value}` === pongKey);
+      if (!pongSet) return prev;
       const newHand = prev.hands[0].filter(t => t.id !== prev.drawnTile.id);
       const upgradedSet = { type: "kong", tiles: [...pongSet.tiles, prev.drawnTile], isConcealed: false };
       const newRevealed = prev.revealed[0].map(s => s === pongSet ? upgradedSet : s);
@@ -1777,7 +1780,7 @@ Give specific, actionable advice. Keep responses under 180 words.`;
                   onClick={() => {
                     if (!isMyTurn && !claimOptions) return;
                     if (claimOptions) return;
-                    if (drawnTile || playerHand.length > 16) {
+                    if (drawnTile || totalHandCount > 16) {
                       if (selectedTile && selectedTile.id === tile.id) {
                         handleDiscard(tile);
                       } else {
@@ -1806,14 +1809,14 @@ Give specific, actionable advice. Keep responses under 180 words.`;
           )}
           {/* Concealed Kong buttons — one per available kong group */}
           {concealedKongOptions.map((kongTiles, i) => (
-            <button key={i} className="claim-btn" onClick={() => handleConcealedKong(kongTiles)}
+            <button key={i} className="claim-btn" onClick={() => handleConcealedKong(`${kongTiles[0].suit}-${kongTiles[0].value}`)}
               style={{ fontSize: 12, padding: "8px 14px", background: "linear-gradient(135deg, #1a2040, #2d1a4a)", borderColor: "#a78bfa", color: "#c4b5fd" }}>
               🀄 Kong ({tl(kongTiles[0])} ×4)
             </button>
           ))}
           {/* Upgrade Kong button — when drawn tile completes an exposed pong */}
           {upgradeKongOption && (
-            <button className="claim-btn" onClick={() => handleUpgradeKong(upgradeKongOption)}
+            <button className="claim-btn" onClick={() => handleUpgradeKong(`${upgradeKongOption.tiles[0].suit}-${upgradeKongOption.tiles[0].value}`)}
               style={{ fontSize: 12, padding: "8px 14px", background: "linear-gradient(135deg, #1a2040, #2d1a4a)", borderColor: "#a78bfa", color: "#c4b5fd" }}>
               🀄 Upgrade → Kong ({tl(upgradeKongOption.tiles[0])} ×4)
             </button>
@@ -2082,9 +2085,8 @@ Give specific, actionable advice. Keep responses under 180 words.`;
   );
 }
 
-
-    const root = ReactDOM.createRoot(document.getElementById('root'));
-    root.render(<MahjongApp />);
-  </script>
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<MahjongApp />);
+</script>
 </body>
 </html>
