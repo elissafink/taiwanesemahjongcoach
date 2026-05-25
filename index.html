@@ -1817,10 +1817,10 @@ Give specific, actionable advice. Keep responses under 180 words.`;
       return;
     }
     if (option.type === "chow") {
-      // Show the chow picker instead of immediately claiming
       const chowOptions = findChowOptions(game.hands[0], discardedTile);
-      if (chowOptions.length === 1) {
-        // Only one valid chow — confirm and complete automatically
+      const winAlsoAvailable = game.claimOptions.options.some(o => o.type === "win");
+      if (chowOptions.length === 1 && !winAlsoAvailable) {
+        // Only one valid chow and no win available — auto-complete
         pushUndo(game, selectedTile);
         const chosenTiles = chowOptions[0];
         const tilesToRemove = chosenTiles.filter(t => t.id !== discardedTile.id);
@@ -1841,12 +1841,12 @@ Give specific, actionable advice. Keep responses under 180 words.`;
         });
         setSelectedTile(null);
       } else {
-        // Multiple chow options — show picker
+        // Multiple chow options OR win is also available — show picker so player can choose
         setChowPicker({
           discardedTile,
           fromPlayer,
           chowOptions,
-          canWin: game.claimOptions.options.some(o => o.type === "win")
+          canWin: winAlsoAvailable
         });
         setGame(prev => ({
           ...prev,
@@ -2077,7 +2077,28 @@ Give specific, actionable advice. Keep responses under 180 words.`;
         marginBottom: 6,
         letterSpacing: 1
       }
-    }, "CHOW \u2014 CHOOSE YOUR SEQUENCE"), /*#__PURE__*/React.createElement("div", {
+    }, "CHOW \u2014 CHOOSE YOUR SEQUENCE"), chowPicker.canWin && /*#__PURE__*/React.createElement("button", {
+      className: "win-btn",
+      onClick: () => {
+        const dt = chowPicker.discardedTile;
+        setChowPicker(null);
+        pushUndo(game, selectedTile);
+        setGame(prev => ({
+          ...prev,
+          claimOptions: null,
+          winner: 0,
+          phase: "won",
+          hands: prev.hands.map((h, i) => i === 0 ? [...h, dt] : h),
+          gameLog: [...prev.gameLog.slice(-20), `You win by claiming ${tl(dt)}! 🎉`]
+        }));
+      },
+      style: {
+        fontSize: 14,
+        padding: "10px 18px",
+        marginBottom: 14,
+        width: "100%"
+      }
+    }, "\uD83C\uDFC6 WIN instead! (claim ", tl(discardedTile), " as your winning tile)"), /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 12,
         color: "#8a7a5a",
