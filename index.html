@@ -43,6 +43,25 @@
           .header-tiles-count { display: none; }
           .header-title { font-size: 14px !important; letter-spacing: 1px !important; }
         }
+
+        /* ── LANDSCAPE PHONES (iPhone rotated) — use the desktop two-pane layout ──
+           so the hand and discard pile get full width instead of the cramped
+           portrait-tab layout. Targets short-height landscape viewports. ── */
+        .rotate-hint { display: none; }
+        @media (orientation: landscape) and (max-height: 500px) {
+          .desktop-layout { display: flex !important; }
+          .mobile-layout { display: none !important; }
+          .mobile-tabbar { display: none !important; }
+          .rotate-hint { display: none !important; }
+          .sticky-header { padding: 4px 10px !important; }
+          .header-title { font-size: 13px !important; letter-spacing: 1px !important; }
+          .header-subtitle { display: none !important; }
+          .coach-side-panel { width: 220px !important; }
+        }
+        /* Portrait phones — gently suggest rotating for a better view */
+        @media (orientation: portrait) and (max-width: 700px) {
+          .rotate-hint { display: flex !important; }
+        }
       
 </style>
 </head>
@@ -1272,6 +1291,7 @@ function MahjongApp() {
   const [apiKey, setApiKey] = useState("");
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [mode, setMode] = useState("clean"); // "clean" | "cabrona"
+  const [manualWinConfirm, setManualWinConfirm] = useState(null); // null | { source, tile? }
   const modeRef = useRef("clean");
   const chatEndRef = useRef(null);
   const aiTimerRef = useRef(null);
@@ -1425,18 +1445,34 @@ Give specific, actionable advice. Keep responses under 180 words.`;
     });
   }, []);
 
-  // Coaching update — fires after draw (drawnTileId non-null) to give discard advice.
-  // Does NOT clear when drawnTileId becomes null — keeps last advice visible until next draw.
-  const handSize = game.hands[0].length;
-  const drawnTileId = game.drawnTile ? game.drawnTile.id : null;
+  // Manual Mahjong declaration — lets the player override automatic win detection.
+  // claimedTile: if declaring by claiming a discard, pass the tile so it's added to hand first.
+  const declareManualWin = useCallback(claimedTile => {
+    pushUndo(game, selectedTile);
+    setGame(prev => ({
+      ...prev,
+      claimOptions: null,
+      winner: 0,
+      phase: "won",
+      hands: claimedTile ? prev.hands.map((h, i) => i === 0 ? [...h, claimedTile] : h) : prev.hands,
+      gameLog: [...prev.gameLog.slice(-20), `You manually declare Mahjong${claimedTile ? ` by claiming ${tlRef(claimedTile)}` : ""}! 🎉 (manual override)`]
+    }));
+    setChowPicker(null);
+    setSelectedTile(null);
+    setManualWinConfirm(null);
+  }, [game, selectedTile, pushUndo]);
+
+  // Coaching update — fires on EVERY game state change (not just specific id tracking)
+  // so advice always reflects the current hand after any draw, discard, pong, chow, or kong.
+  // Does NOT clear when drawnTile becomes null — keeps last advice visible until next draw.
   useEffect(() => {
-    if (game.phase === "playing" && game.currentPlayer === 0 && drawnTileId !== null) {
+    if (game.phase === "playing" && game.currentPlayer === 0 && game.drawnTile) {
       const analysis = analyzeHand(game.hands[0], game.discardPile, game.revealed[0], game.discardPiles, mode);
       setCoaching(analysis);
     }
-    // Deliberately NOT clearing coaching when drawnTileId is null —
+    // Deliberately NOT clearing coaching when drawnTile is null —
     // we want the last advice to remain visible between turns.
-  }, [game.currentPlayer, handSize, drawnTileId, game.phase]);
+  }, [game, mode]);
 
   // Claim advice — computed inline when claimOptions exist
   const claimAdvice = (() => {
@@ -2077,7 +2113,7 @@ Give specific, actionable advice. Keep responses under 180 words.`;
         marginBottom: 6,
         letterSpacing: 1
       }
-    }, "CHOW \u2014 CHOOSE YOUR SEQUENCE"), chowPicker.canWin && /*#__PURE__*/React.createElement("button", {
+    }, "CHOW — CHOOSE YOUR SEQUENCE"), chowPicker.canWin && /*#__PURE__*/React.createElement("button", {
       className: "win-btn",
       onClick: () => {
         const dt = chowPicker.discardedTile;
@@ -2098,7 +2134,7 @@ Give specific, actionable advice. Keep responses under 180 words.`;
         marginBottom: 14,
         width: "100%"
       }
-    }, "\uD83C\uDFC6 WIN instead! (claim ", tl(discardedTile), " as your winning tile)"), /*#__PURE__*/React.createElement("div", {
+    }, "🏆 WIN instead! (claim ", tl(discardedTile), " as your winning tile)"), /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 12,
         color: "#8a7a5a",
@@ -2162,7 +2198,7 @@ Give specific, actionable advice. Keep responses under 180 words.`;
         justifyContent: "center",
         fontWeight: "bold"
       }
-    }, "\u2605")))), /*#__PURE__*/React.createElement("span", {
+    }, "★")))), /*#__PURE__*/React.createElement("span", {
       style: {
         fontSize: 11,
         color: "#8a7a5a"
@@ -2190,7 +2226,7 @@ Give specific, actionable advice. Keep responses under 180 words.`;
         fontSize: 11,
         width: "100%"
       }
-    }, "\u2190 Cancel (go back to claim options)")));
+    }, "← Cancel (go back to claim options)")));
   };
   const COLORS = {
     bg: "#0a1628",
@@ -2250,7 +2286,7 @@ Give specific, actionable advice. Keep responses under 180 words.`;
       fontSize: 20,
       marginBottom: 6
     }
-  }, "\uD83C\uDC04"), /*#__PURE__*/React.createElement("div", {
+  }, "🀄"), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 12,
       color: COLORS.textMuted,
@@ -2353,7 +2389,7 @@ Give specific, actionable advice. Keep responses under 180 words.`;
     style: {
       color: "#f59e0b"
     }
-  }, "\u2713 Triplets (", coaching.triplets.length, "):"), " ", /*#__PURE__*/React.createElement("span", {
+  }, "✓ Triplets (", coaching.triplets.length, "):"), " ", /*#__PURE__*/React.createElement("span", {
     style: {
       color: COLORS.textMuted
     }
@@ -2366,7 +2402,7 @@ Give specific, actionable advice. Keep responses under 180 words.`;
     style: {
       color: "#22c55e"
     }
-  }, "\u2713 Sequences (", coaching.sequences.length, "):"), " ", /*#__PURE__*/React.createElement("span", {
+  }, "✓ Sequences (", coaching.sequences.length, "):"), " ", /*#__PURE__*/React.createElement("span", {
     style: {
       color: COLORS.textMuted
     }
@@ -2500,7 +2536,7 @@ Give specific, actionable advice. Keep responses under 180 words.`;
       marginTop: 6,
       lineHeight: 1.6
     }
-  }, "\u26A1 You have open sets \u2014 others can read your suits. They may hold back tiles that help you."))), !isMyTurn && !claimAdvice && !coaching && /*#__PURE__*/React.createElement("div", {
+  }, "⚡ You have open sets — others can read your suits. They may hold back tiles that help you."))), !isMyTurn && !claimAdvice && !coaching && /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 12,
       color: COLORS.textMuted,
@@ -2512,7 +2548,7 @@ Give specific, actionable advice. Keep responses under 180 words.`;
       fontSize: 24,
       marginBottom: 8
     }
-  }, "\u23F3"), "Waiting for opponents...", /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("span", {
+  }, "⏳"), "Waiting for opponents...", /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("span", {
     style: {
       fontSize: 11
     }
@@ -2615,12 +2651,12 @@ Give specific, actionable advice. Keep responses under 180 words.`;
     }
   }, currentPlayer === 2 && /*#__PURE__*/React.createElement("span", {
     className: "pulsing"
-  }, "\u25BC "), "WEST \xB7 ", hands[2].filter(t => !t.isFlower).length + revealed[2].reduce((s, r) => s + 3, 0), flowers[2].length > 0 && /*#__PURE__*/React.createElement("span", {
+  }, "▼ "), "WEST · ", hands[2].filter(t => !t.isFlower).length + revealed[2].reduce((s, r) => s + 3, 0), flowers[2].length > 0 && /*#__PURE__*/React.createElement("span", {
     style: {
       color: "#22c55e",
       marginLeft: 6
     }
-  }, "\uD83C\uDF38\xD7", flowers[2].length)), /*#__PURE__*/React.createElement("div", {
+  }, "🌸×", flowers[2].length)), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 2,
@@ -2885,7 +2921,7 @@ Give specific, actionable advice. Keep responses under 180 words.`;
     }
   }, currentPlayer === 0 && /*#__PURE__*/React.createElement("span", {
     className: "pulsing"
-  }, "\u25B2 YOUR TURN \xB7 "), "YOUR HAND \xB7 ", totalHandCount, " tiles"), /*#__PURE__*/React.createElement("div", {
+  }, "▲ YOUR TURN · "), "YOUR HAND · ", totalHandCount, " tiles"), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 6
@@ -2895,7 +2931,7 @@ Give specific, actionable advice. Keep responses under 180 words.`;
       fontSize: 10,
       color: "#22c55e"
     }
-  }, "\uD83C\uDF38\xD7", flowers[0].length), revealed[0].length > 0 && /*#__PURE__*/React.createElement("div", {
+  }, "🌸×", flowers[0].length), revealed[0].length > 0 && /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 10,
       color: COLORS.textMuted
@@ -2926,7 +2962,19 @@ Give specific, actionable advice. Keep responses under 180 words.`;
       fontSize: 12,
       padding: "6px 12px"
     }
-  }, opt.type === "win" ? "🏆 WIN!" : opt.type === "kong" ? "🀄 KONG" : opt.type === "pong" ? "PONG" : "CHOW")), /*#__PURE__*/React.createElement("button", {
+  }, opt.type === "win" ? "🏆 WIN!" : opt.type === "kong" ? "🀄 KONG" : opt.type === "pong" ? "PONG" : "CHOW")), !claimOptions.options.some(o => o.type === "win") && /*#__PURE__*/React.createElement("button", {
+    className: "btn-outline",
+    onClick: () => setManualWinConfirm({
+      source: "claim",
+      tile: claimOptions.discardedTile
+    }),
+    style: {
+      fontSize: 11,
+      padding: "6px 10px",
+      opacity: 0.85
+    },
+    title: "Use this if this tile completes a winning hand the app didn't detect"
+  }, "🀄 Declare Mahjong"), /*#__PURE__*/React.createElement("button", {
     className: "btn-outline",
     onClick: () => handleClaim({
       type: "skip"
@@ -3029,7 +3077,18 @@ Give specific, actionable advice. Keep responses under 180 words.`;
       fontSize: 14,
       padding: "9px 18px"
     }
-  }, "\uD83C\uDFC6 WIN!"), concealedKongOptions.map((kongTiles, i) => /*#__PURE__*/React.createElement("button", {
+  }, "🏆 WIN!"), isMyTurn && drawnTile && !canWinNow && !claimOptions && !chowPicker && /*#__PURE__*/React.createElement("button", {
+    className: "btn-outline",
+    onClick: () => setManualWinConfirm({
+      source: "self"
+    }),
+    style: {
+      fontSize: 11,
+      padding: "7px 12px",
+      opacity: 0.85
+    },
+    title: "Use this if you have a winning hand the app didn't detect"
+  }, "🀄 Declare Mahjong (manual)"), concealedKongOptions.map((kongTiles, i) => /*#__PURE__*/React.createElement("button", {
     key: i,
     className: "claim-btn",
     onClick: () => handleConcealedKong(`${kongTiles[0].suit}-${kongTiles[0].value}`),
@@ -3040,7 +3099,7 @@ Give specific, actionable advice. Keep responses under 180 words.`;
       borderColor: "#a78bfa",
       color: "#c4b5fd"
     }
-  }, "\uD83C\uDC04 Kong (", tl(kongTiles[0]), " \xD74)")), upgradeKongOption && /*#__PURE__*/React.createElement("button", {
+  }, "🀄 Kong (", tl(kongTiles[0]), " ×4)")), upgradeKongOption && /*#__PURE__*/React.createElement("button", {
     className: "claim-btn",
     onClick: () => handleUpgradeKong(`${upgradeKongOption.tiles[0].suit}-${upgradeKongOption.tiles[0].value}`),
     style: {
@@ -3050,18 +3109,18 @@ Give specific, actionable advice. Keep responses under 180 words.`;
       borderColor: "#a78bfa",
       color: "#c4b5fd"
     }
-  }, "\uD83C\uDC04 Upgrade \u2192 Kong (", tl(upgradeKongOption.tiles[0]), " \xD74)"), isMyTurn && drawnTile && !claimOptions && !canWinNow && !chowPicker && /*#__PURE__*/React.createElement("div", {
+  }, "🀄 Upgrade → Kong (", tl(upgradeKongOption.tiles[0]), " ×4)"), isMyTurn && drawnTile && !claimOptions && !canWinNow && !chowPicker && /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 10,
       color: COLORS.textMuted
     }
-  }, "Tap a tile to select \xB7 tap again or hit Discard"), !isMyTurn && !claimOptions && !chowPicker && /*#__PURE__*/React.createElement("div", {
+  }, "Tap a tile to select · tap again or hit Discard"), !isMyTurn && !claimOptions && !chowPicker && /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 11,
       color: COLORS.textMuted
     },
     className: "pulsing"
-  }, "Waiting for ", opponentLabels[currentPlayer], "\u2026"), undoStack.length > 0 && !chowPicker && /*#__PURE__*/React.createElement("button", {
+  }, "Waiting for ", opponentLabels[currentPlayer], "…"), undoStack.length > 0 && !chowPicker && /*#__PURE__*/React.createElement("button", {
     className: "btn-outline",
     onClick: handleUndo,
     style: {
@@ -3071,7 +3130,7 @@ Give specific, actionable advice. Keep responses under 180 words.`;
       opacity: 0.85
     },
     title: `Undo last move (${undoStack.length} left)`
-  }, "\u21A9 Undo ", undoStack.length > 1 ? `(${undoStack.length})` : ""))));
+  }, "↩ Undo ", undoStack.length > 1 ? `(${undoStack.length})` : ""))));
   return /*#__PURE__*/React.createElement("div", {
     style: {
       minHeight: "100dvh",
@@ -3117,7 +3176,43 @@ Give specific, actionable advice. Keep responses under 180 words.`;
           .header-tiles-count { display: none; }
           .header-title { font-size: 14px !important; letter-spacing: 1px !important; }
         }
+
+        /* ── LANDSCAPE PHONES (iPhone rotated) — use the desktop two-pane layout ──
+           so the hand and discard pile get full width instead of the cramped
+           portrait-tab layout. Targets short-height landscape viewports. ── */
+        .rotate-hint { display: none; }
+        @media (orientation: landscape) and (max-height: 500px) {
+          .desktop-layout { display: flex !important; }
+          .mobile-layout { display: none !important; }
+          .mobile-tabbar { display: none !important; }
+          .rotate-hint { display: none !important; }
+          .sticky-header { padding: 4px 10px !important; }
+          .header-title { font-size: 13px !important; letter-spacing: 1px !important; }
+          .header-subtitle { display: none !important; }
+          .coach-side-panel { width: 220px !important; }
+        }
+        /* Portrait phones — gently suggest rotating for a better view */
+        @media (orientation: portrait) and (max-width: 700px) {
+          .rotate-hint { display: flex !important; }
+        }
       `), /*#__PURE__*/React.createElement("div", {
+    className: "rotate-hint",
+    style: {
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 6,
+      background: "rgba(212,168,67,0.12)",
+      borderBottom: `1px solid ${COLORS.border}`,
+      padding: "5px 10px",
+      fontSize: 11,
+      color: COLORS.gold
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      display: "inline-block",
+      transform: "rotate(90deg)"
+    }
+  }, "📱"), "Rotate your phone sideways for a bigger hand and discard pile view"), /*#__PURE__*/React.createElement("div", {
     className: "sticky-header",
     style: {
       borderBottom: `1px solid ${COLORS.border}`,
@@ -3138,7 +3233,7 @@ Give specific, actionable advice. Keep responses under 180 words.`;
       fontSize: 24,
       lineHeight: 1
     }
-  }, "\uD83C\uDC04"), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+  }, "🀄"), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "header-title",
     style: {
       fontFamily: "'Cinzel', serif",
@@ -3154,7 +3249,7 @@ Give specific, actionable advice. Keep responses under 180 words.`;
       color: COLORS.textMuted,
       letterSpacing: 1
     }
-  }, "COACHING EDITION \xB7 Wind: ", game.roundWind))), /*#__PURE__*/React.createElement("div", {
+  }, "COACHING EDITION · Wind: ", game.roundWind))), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 8,
@@ -3166,7 +3261,7 @@ Give specific, actionable advice. Keep responses under 180 words.`;
       fontSize: 11,
       color: COLORS.gold
     }
-  }, "\uD83C\uDCCF ", deck.length), /*#__PURE__*/React.createElement("button", {
+  }, "🃏 ", deck.length), /*#__PURE__*/React.createElement("button", {
     onClick: () => setMode(m => m === "clean" ? "cabrona" : "clean"),
     style: {
       background: mode === "cabrona" ? "linear-gradient(135deg, #7c2d12, #dc2626)" : "transparent",
@@ -3212,14 +3307,14 @@ Give specific, actionable advice. Keep responses under 180 words.`;
     style: {
       color: "#ef4444"
     }
-  }, " \uD83D\uDE08 Cabrona mode active \u2014 Bam = Pnis, Cir = Hole, Flwr = dFlw."), "\xA0", /*#__PURE__*/React.createElement("button", {
+  }, " 😈 Cabrona mode active — Bam = Pnis, Cir = Hole, Flwr = dFlw."), "\xA0", /*#__PURE__*/React.createElement("button", {
     className: "btn-outline",
     onClick: () => setShowRules(false),
     style: {
       fontSize: 10,
       padding: "2px 7px"
     }
-  }, "\u2715")), winner !== null && /*#__PURE__*/React.createElement("div", {
+  }, "✕")), winner !== null && /*#__PURE__*/React.createElement("div", {
     style: {
       position: "fixed",
       inset: 0,
@@ -3257,7 +3352,64 @@ Give specific, actionable advice. Keep responses under 180 words.`;
       fontSize: 15,
       padding: "12px 32px"
     }
-  }, "Play Again")), /*#__PURE__*/React.createElement(ChowPickerUI, null), /*#__PURE__*/React.createElement("div", {
+  }, "Play Again")), /*#__PURE__*/React.createElement(ChowPickerUI, null), manualWinConfirm && /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: "fixed",
+      inset: 0,
+      zIndex: 110,
+      background: "rgba(0,0,0,0.75)",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      padding: 20
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: COLORS.panel,
+      border: `1px solid ${COLORS.gold}`,
+      borderRadius: 10,
+      padding: 24,
+      maxWidth: 380,
+      width: "100%",
+      boxShadow: "0 0 40px rgba(212,168,67,0.2)"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontFamily: "'Cinzel', serif",
+      color: COLORS.gold,
+      fontSize: 16,
+      marginBottom: 10,
+      letterSpacing: 1
+    }
+  }, "🏆 DECLARE MAHJONG?"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13,
+      color: COLORS.textMuted,
+      marginBottom: 18,
+      lineHeight: 1.6
+    }
+  }, "This bypasses the automatic hand checker. Make sure your hand is genuinely valid — 4 sets + 1 pair (or 7 pairs for All Pairs) — before confirming."), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 10
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn-outline",
+    onClick: () => setManualWinConfirm(null),
+    style: {
+      flex: 1,
+      fontSize: 13,
+      padding: "10px"
+    }
+  }, "Cancel"), /*#__PURE__*/React.createElement("button", {
+    className: "win-btn",
+    onClick: () => declareManualWin(manualWinConfirm.tile || null),
+    style: {
+      flex: 1,
+      fontSize: 13,
+      padding: "10px"
+    }
+  }, "Yes, Declare Mahjong")))), /*#__PURE__*/React.createElement("div", {
     className: "desktop-layout",
     style: {
       flex: 1
@@ -3266,6 +3418,7 @@ Give specific, actionable advice. Keep responses under 180 words.`;
     compact: false,
     mode: mode
   }), /*#__PURE__*/React.createElement("div", {
+    className: "coach-side-panel",
     style: {
       width: 280,
       background: COLORS.panel,
@@ -3281,7 +3434,7 @@ Give specific, actionable advice. Keep responses under 180 words.`;
       color: COLORS.gold,
       letterSpacing: 1
     }
-  }, "\uD83C\uDF93 COACH ANALYSIS"), /*#__PURE__*/React.createElement(CoachPanel, {
+  }, "🎓 COACH ANALYSIS"), /*#__PURE__*/React.createElement(CoachPanel, {
     mode: mode
   }), /*#__PURE__*/React.createElement("div", {
     style: {
@@ -3298,7 +3451,7 @@ Give specific, actionable advice. Keep responses under 180 words.`;
       color: COLORS.gold,
       letterSpacing: 0.5
     }
-  }, "\uD83D\uDCAC ASK THE COACH"), !apiKey ? /*#__PURE__*/React.createElement("div", {
+  }, "💬 ASK THE COACH"), !apiKey ? /*#__PURE__*/React.createElement("div", {
     style: {
       padding: "10px 12px"
     }
@@ -3377,7 +3530,7 @@ Give specific, actionable advice. Keep responses under 180 words.`;
       display: "block",
       marginBottom: 2
     }
-  }, "\uD83C\uDF93 Coach"), msg.text)), chatLoading && /*#__PURE__*/React.createElement("div", {
+  }, "🎓 Coach"), msg.text)), chatLoading && /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 11,
       color: COLORS.textMuted,
@@ -3385,7 +3538,7 @@ Give specific, actionable advice. Keep responses under 180 words.`;
       fontStyle: "italic"
     },
     className: "pulsing"
-  }, "Coach is thinking\u2026"), /*#__PURE__*/React.createElement("div", {
+  }, "Coach is thinking…"), /*#__PURE__*/React.createElement("div", {
     ref: chatEndRef
   })), /*#__PURE__*/React.createElement("div", {
     style: {
@@ -3400,7 +3553,7 @@ Give specific, actionable advice. Keep responses under 180 words.`;
     onKeyDown: e => {
       if (e.key === "Enter" && !chatLoading) sendChatMessage(chatInput);
     },
-    placeholder: "Ask about your hand\u2026",
+    placeholder: "Ask about your hand…",
     disabled: chatLoading,
     style: {
       flex: 1,
@@ -3470,14 +3623,14 @@ Give specific, actionable advice. Keep responses under 180 words.`;
       color: COLORS.gold,
       letterSpacing: 1
     }
-  }, "\uD83C\uDF93 COACH ANALYSIS"), /*#__PURE__*/React.createElement("button", {
+  }, "🎓 COACH ANALYSIS"), /*#__PURE__*/React.createElement("button", {
     className: "btn-outline",
     onClick: () => setMobileTab("game"),
     style: {
       fontSize: 11,
       padding: "4px 10px"
     }
-  }, "\u2190 Back to Game")), /*#__PURE__*/React.createElement(CoachPanel, {
+  }, "← Back to Game")), /*#__PURE__*/React.createElement(CoachPanel, {
     mode: mode
   }), /*#__PURE__*/React.createElement("div", {
     style: {
@@ -3495,7 +3648,7 @@ Give specific, actionable advice. Keep responses under 180 words.`;
       color: COLORS.gold,
       letterSpacing: 0.5
     }
-  }, "\uD83D\uDCAC ASK THE COACH"), !apiKey ? /*#__PURE__*/React.createElement("div", {
+  }, "💬 ASK THE COACH"), !apiKey ? /*#__PURE__*/React.createElement("div", {
     style: {
       padding: "10px 12px"
     }
@@ -3574,7 +3727,7 @@ Give specific, actionable advice. Keep responses under 180 words.`;
       display: "block",
       marginBottom: 2
     }
-  }, "\uD83C\uDF93 Coach"), msg.text)), chatLoading && /*#__PURE__*/React.createElement("div", {
+  }, "🎓 Coach"), msg.text)), chatLoading && /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 11,
       color: COLORS.textMuted,
@@ -3582,7 +3735,7 @@ Give specific, actionable advice. Keep responses under 180 words.`;
       fontStyle: "italic"
     },
     className: "pulsing"
-  }, "Coach is thinking\u2026"), /*#__PURE__*/React.createElement("div", {
+  }, "Coach is thinking…"), /*#__PURE__*/React.createElement("div", {
     ref: chatEndRef
   })), /*#__PURE__*/React.createElement("div", {
     style: {
@@ -3597,7 +3750,7 @@ Give specific, actionable advice. Keep responses under 180 words.`;
     onKeyDown: e => {
       if (e.key === "Enter" && !chatLoading) sendChatMessage(chatInput);
     },
-    placeholder: "Ask about your hand\u2026",
+    placeholder: "Ask about your hand…",
     disabled: chatLoading,
     style: {
       flex: 1,
